@@ -1,5 +1,7 @@
 import asyncio
 from datetime import datetime, timedelta
+import logging
+import sys
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (
@@ -7,27 +9,37 @@ from aiogram.types import (
     InlineKeyboardMarkup, InlineKeyboardButton,
     FSInputFile
 )
-from aiogram.filters import CommandStart
+from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import StatesGroup, State
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.client.session.aiohttp import AiohttpSession  # добавить импорт
+from aiogram.client.session.aiohttp import AiohttpSession
+from aiogram.client.telegram import TelegramAPIServer
+from aiogram.exceptions import TelegramNetworkError, TelegramRetryAfter
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('bot.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
+)
+logger = logging.getLogger(__name__)
 
 TOKEN = "8480963257:AAEA-Seyoihokv5dFAOAwlRaCHBsYijp8Ds"
 ADMIN_ID = 1658346274
 
-# Создаём сессию с увеличенным таймаутом (60 секунд)
-session = AiohttpSession(timeout=60)
+# Увеличиваем таймаут сессии до 120 секунд
+session = AiohttpSession(timeout=120)
 bot = Bot(token=TOKEN, session=session)
-
 dp = Dispatcher(storage=MemoryStorage())
 scheduler = AsyncIOScheduler()
 
-# ... весь остальной код без изменений (меню, хэндлеры, FSM и т.д.) ...
-# ---------------- FSM ----------------
-
+# -------------------- FSM состояния --------------------
 class Booking(StatesGroup):
     name = State()
     age = State()
@@ -36,53 +48,200 @@ class Booking(StatesGroup):
     time = State()
     payment_check = State()
 
-# ---------------- MENU ----------------
+class SendPhoto(StatesGroup):
+    waiting_for_photo = State()
 
-menu = ReplyKeyboardMarkup(
+# -------------------- Клавиатуры --------------------
+
+# Стартовое меню
+start_menu = ReplyKeyboardMarkup(
     keyboard=[
+        [KeyboardButton(text="💎 Пирсинг")],
+        [KeyboardButton(text="✍️ Тату")],
+        [KeyboardButton(text="📞 Связаться с мастером")]
+    ],
+    resize_keyboard=True,
+    input_field_placeholder="Выберите раздел..."
+)
+
+# Главное меню Пирсинга
+piercing_main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ Частые вопросы (пирсинг)")],
+        [KeyboardButton(text="⚠️ SOS")],
         [KeyboardButton(text="📋 Прайс и правила")],
         [KeyboardButton(text="📅 Свободные окошки")],
-        [KeyboardButton(text="🖊 Записаться")],
-        [KeyboardButton(text="❓ Частые вопросы (FAQ)")],
-        [KeyboardButton(text="🚫 Противопоказания к пирсингу")],
-        [KeyboardButton(text="📌 Подготовка к пирсингу ВАЖНО!")],
-        [KeyboardButton(text="🧼 Общий уход за пирсингом")],
-        [KeyboardButton(text="👄 Уход за пирсингом в ротовой полости")],
-        [KeyboardButton(text="📍 Адрес студии")]
+        [KeyboardButton(text="🖊 Записаться на пирсинг")],
+        [KeyboardButton(text="📍 Адрес студии")],
+        [KeyboardButton(text="💌 Прислать фото мастеру")],
+        [KeyboardButton(text="📌 Памятки (пирсинг)")],
+        [KeyboardButton(text="🔙 Назад к выбору")]
     ],
     resize_keyboard=True
 )
 
-# ---------------- SUB-MENU FOR FAQ ----------------
-
-faq_menu = ReplyKeyboardMarkup(
+# Меню "Частые вопросы (пирсинг)"
+piercing_faq_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="❓ Основные вопросы")],
-        [KeyboardButton(text="🔧 Почему нужна замена ножки?")],
+        [KeyboardButton(text="🥵 А прокол сосков?")],
+        [KeyboardButton(text="🚫 Почему нельзя кольцо?")],
+        [KeyboardButton(text="🚫 Почему нельзя золото/серебро?")],
+        [KeyboardButton(text="🔧 Замена ножки (даунсайз)")],
         [KeyboardButton(text="⚠️ Что делать если задел пирсинг?")],
         [KeyboardButton(text="🔬 Почему ТИТАН?")],
         [KeyboardButton(text="💉 Почему только ИГЛА?")],
         [KeyboardButton(text="💊 Почему нельзя обезбол?")],
         [KeyboardButton(text="👶 Проколы в детском возрасте")],
         [KeyboardButton(text="🥵 Это больно?")],
-        [KeyboardButton(text="🥵 А прокол сосков?")],
         [KeyboardButton(text="❌ Пирсинг и пистолет")],
-        [KeyboardButton(text="🔙 Назад в главное меню")]
+        [KeyboardButton(text="❓ Основные вопросы")],
+        [KeyboardButton(text="🔙 Назад в меню пирсинга")]
     ],
     resize_keyboard=True
 )
 
-# ---------------- START ----------------
+# Меню "Памятки (пирсинг)"
+piercing_memos_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📌 Подготовка к пирсингу ВАЖНО!")],
+        [KeyboardButton(text="🧼 Общий уход за пирсингом")],
+        [KeyboardButton(text="👄 Уход за пирсингом в ротовой полости")],
+        [KeyboardButton(text="🔙 Назад в меню пирсинга")]
+    ],
+    resize_keyboard=True
+)
 
+# Меню "SOS"
+sos_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="💫 Ваш идеальный пирсинг")],
+        [KeyboardButton(text="💧 Раскрутился пирсинг")],
+        [KeyboardButton(text="❣️ Как быстро зарастает прокол")],
+        [KeyboardButton(text="💧 Задели пирсинг")],
+        [KeyboardButton(text="💧 Появился нарост/уплотнение")],
+        [KeyboardButton(text="❤️‍🩹 Сильный оттек пирсинга")],
+        [KeyboardButton(text="🔙 Назад в меню пирсинга")]
+    ],
+    resize_keyboard=True
+)
+
+# Главное меню Тату
+tattoo_main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="❓ Популярные вопросы (тату)")],
+        [KeyboardButton(text="💌 Записаться на сеанс тату")],
+        [KeyboardButton(text="💌 Прислать фото мастеру")],
+        [KeyboardButton(text="📍 Адрес студии")],
+        [KeyboardButton(text="📌 Памятки (тату)")],
+        [KeyboardButton(text="🔙 Назад к выбору")]
+    ],
+    resize_keyboard=True
+)
+
+# Меню "Популярные вопросы (тату)"
+tattoo_faq_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📌 Стоимость татуировки")],
+        [KeyboardButton(text="💔 Больно ли делать тату")],
+        [KeyboardButton(text="✍🏽 Про создание эскиза")],
+        [KeyboardButton(text="🩶 Мифы о татуировках")],
+        [KeyboardButton(text="☀️ Тату летом")],
+        [KeyboardButton(text="✍🏽 Коррекции")],
+        [KeyboardButton(text="🔙 Назад в меню тату")]
+    ],
+    resize_keyboard=True
+)
+
+# Меню "Памятки (тату)"
+tattoo_memos_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🖤 Подготовка к сеансу тату")],
+        [KeyboardButton(text="🖤 Уход за тату (пленка)")],
+        [KeyboardButton(text="🖤 Уход за тату (мазь)")],
+        [KeyboardButton(text="💔 Не следуете рекомендациям")],
+        [KeyboardButton(text="🔙 Назад в меню тату")]
+    ],
+    resize_keyboard=True
+)
+
+# -------------------- Команда отмены --------------------
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    if current_state is None:
+        await safe_send_message(message, "Нет активного действия.", reply_markup=start_menu)
+        return
+    await state.clear()
+    await safe_send_message(message, "Действие отменено. Выберите пункт меню.", reply_markup=start_menu)
+
+# -------------------- Функция безопасной отправки сообщений с повторными попытками --------------------
+async def safe_send_message(message_or_chat, text, reply_markup=None, photo=None, retry_count=3):
+    """Безопасная отправка сообщений с повторными попытками при таймауте"""
+    for attempt in range(retry_count):
+        try:
+            if isinstance(message_or_chat, types.Message):
+                if photo:
+                    return await message_or_chat.answer_photo(photo=photo, caption=text, reply_markup=reply_markup)
+                else:
+                    return await message_or_chat.answer(text, reply_markup=reply_markup)
+            else:
+                # Это chat_id
+                if photo:
+                    return await bot.send_photo(chat_id=message_or_chat, photo=photo, caption=text, reply_markup=reply_markup)
+                else:
+                    return await bot.send_message(chat_id=message_or_chat, text=text, reply_markup=reply_markup)
+        except (TelegramNetworkError, TimeoutError, asyncio.TimeoutError) as e:
+            logger.warning(f"Attempt {attempt + 1} failed: {e}")
+            if attempt == retry_count - 1:
+                logger.error(f"Failed to send message after {retry_count} attempts")
+                raise
+            await asyncio.sleep(1 * (attempt + 1))  # Увеличиваем задержку с каждой попыткой
+
+async def safe_send_media_group(message_or_chat, media, retry_count=3):
+    """Безопасная отправка медиа-группы с повторными попытками"""
+    for attempt in range(retry_count):
+        try:
+            if isinstance(message_or_chat, types.Message):
+                return await message_or_chat.answer_media_group(media=media)
+            else:
+                return await bot.send_media_group(chat_id=message_or_chat, media=media)
+        except (TelegramNetworkError, TimeoutError, asyncio.TimeoutError) as e:
+            logger.warning(f"Media group attempt {attempt + 1} failed: {e}")
+            if attempt == retry_count - 1:
+                logger.error(f"Failed to send media group after {retry_count} attempts")
+                return None
+            await asyncio.sleep(1 * (attempt + 1))
+
+# -------------------- Старт --------------------
 @dp.message(CommandStart())
 async def start(message: types.Message):
-    await message.answer(
-        "Добро пожаловать в студию пирсинга Tattoo.Gem 💎\nВыберите действие:",
-        reply_markup=menu
+    welcome_text = (
+        "Этот бот — ваш быстрый гид по пирсингу и тату 💌\n"
+        "Здесь вы можете найти ответы на самые частые вопросы, разобраться в уходе и заживлении, "
+        "а также записаться на процедуру или написать мне ❤️\n\n"
+        "Вас интересует:"
     )
+    await safe_send_message(message, welcome_text, reply_markup=start_menu)
 
-# ---------------- PRICE ----------------
+# -------------------- Навигация --------------------
+@dp.message(F.text == "🔙 Назад к выбору")
+async def back_to_start(message: types.Message):
+    await safe_send_message(message, "Выберите категорию:", reply_markup=start_menu)
 
+# -------------------- Пирсинг --------------------
+@dp.message(F.text == "💎 Пирсинг")
+async def piercing_main(message: types.Message):
+    text = (
+        "Пирсинг — это маленькая история, которую вы рассказываете миру ☀️\n"
+        "Пусть каждая деталь этой истории будет такой же уникальной, как и вы! 💖"
+    )
+    await safe_send_message(message, text, reply_markup=piercing_main_menu)
+
+@dp.message(F.text == "🔙 Назад в меню пирсинга")
+async def back_to_piercing_main(message: types.Message):
+    await safe_send_message(message, "Меню пирсинга:", reply_markup=piercing_main_menu)
+
+# -------------------- Прайс и правила --------------------
 @dp.message(F.text == "📋 Прайс и правила")
 async def price(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -93,10 +252,9 @@ async def price(message: types.Message):
             )]
         ]
     )
-    await message.answer("Нажмите чтобы посмотреть прайс и правила записи", reply_markup=keyboard)
+    await safe_send_message(message, "Нажмите чтобы посмотреть прайс и правила записи", reply_markup=keyboard)
 
-# ---------------- SLOTS ----------------
-
+# -------------------- Свободные окошки --------------------
 @dp.message(F.text == "📅 Свободные окошки")
 async def slots(message: types.Message):
     keyboard = InlineKeyboardMarkup(
@@ -107,41 +265,62 @@ async def slots(message: types.Message):
             )]
         ]
     )
-    await message.answer("Свободные даты:", reply_markup=keyboard)
+    await safe_send_message(message, "Свободные даты:", reply_markup=keyboard)
 
-# ---------------- FAQ MAIN ----------------
-
-@dp.message(F.text == "❓ Частые вопросы (FAQ)")
-async def faq_main(message: types.Message):
-    await message.answer(
-        "Выберите интересующий вас вопрос:",
-        reply_markup=faq_menu
+# -------------------- Адрес студии --------------------
+@dp.message(F.text == "📍 Адрес студии")
+async def address(message: types.Message):
+    address_text = (
+        "📍 Tattoo.Gem\n"
+        "Московская 10, вход с торца здания\n\n"
+        "➡️ Через охрану на лифт, 5 этаж, с балкона на право\n"
+        "(При входе нужно будет показать кюар код на охране 🧡)\n\n"
+        "➡️ Либо по лестнице на 5 этаж и налево (если охраны нет)\n\n"
+        "Нажмите на звоночек🧡, я открою\n"
+        "💃 На входе надеваем бахилки/тапочки"
     )
 
-# ---------------- BASIC FAQ ----------------
+    try:
+        photo = FSInputFile("studio_address.jpg")
+        await safe_send_message(message, address_text, photo=photo)
+    except FileNotFoundError:
+        await safe_send_message(message, address_text)
 
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🗺 Яндекс Карты", url="https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964")],
+            [InlineKeyboardButton(text="🗺 2ГИС", url="https://2gis.ru/sochi/geo/70000001075813793")],
+            [InlineKeyboardButton(text="📸 Instagram", url="https://instagram.com/tattoo.gem.sochi")],
+            [InlineKeyboardButton(text="📱 Telegram канал (Тату)", url="https://t.me/TattooGemSochi")],
+            [InlineKeyboardButton(text="📱 Telegram канал (Пирсинг)", url="https://t.me/GemShopSochi")]
+        ]
+    )
+    await safe_send_message(message, "Наши соцсети и карты:", reply_markup=keyboard)
+
+# -------------------- Частые вопросы (пирсинг) --------------------
+@dp.message(F.text == "❓ Частые вопросы (пирсинг)")
+async def piercing_faq(message: types.Message):
+    await safe_send_message(message, "Выберите интересующий вопрос:", reply_markup=piercing_faq_menu)
+
+# --- FAQ: Основные вопросы ---
 @dp.message(F.text == "❓ Основные вопросы")
 async def basic_faq(message: types.Message):
     text = (
         "❓ ОСНОВНЫЕ ВОПРОСЫ:\n\n"
-
         "🔹 Почему нельзя сразу установить кольцо?\n"
         "При первичном проколе устанавливается только титановый или биопластиковый бампер (штанга). "
         "Кольцо можно будет установить после полного заживления канала (через 1-3 месяца), так как "
         "кольцо травмирует свежий прокол и замедляет заживление.\n\n"
-
         "🔹 Почему нельзя со своим украшением?\n"
         "Мы не принимаем свои украшения по нескольким причинам:\n"
         "• неизвестно качество материала и обработки\n"
         "• невозможность гарантировать стерильность\n"
         "• украшение может быть неподходящего размера\n"
         "• ответственность за результат\n\n"
-
         "🔹 Почему нельзя сразу установить золото/серебро?\n"
         "Золото и серебро содержат лигатуры (примеси), которые могут вызвать аллергию и замедлить "
         "заживление. Для первичного прокола используется только медицинский титан, ниобий или "
         "биопластик.\n\n"
-
         "🔹 Сколько заживает?\n"
         "Сроки заживления зависят от места прокола:\n"
         "• Мочка уха: 1-2 месяца\n"
@@ -152,11 +331,106 @@ async def basic_faq(message: types.Message):
         "• Язык: 3-6 недель\n"
         "• Губа: 2-3 месяца"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- REPLACEMENT FAQ (обновлённый текст) ----------------
+# --- FAQ: А прокол сосков? ---
+@dp.message(F.text == "🥵 А прокол сосков?")
+async def nipple_piercing_faq(message: types.Message):
+    text = (
+        "🥵 А прокол сосков?\n\n"
+        "🫶🏽 Я всегда отвечаю честно: да, это один из самых чувствительных проколов, "
+        "потому что соски — очень нервная зона. Ощущения могут быть довольно яркими! 🐠\n\n"
+        "Но есть важный момент — сам прокол длится буквально 1–2 секунды! 💫\n"
+        "И большинство клиентов после процедуры удивлённо говорят:\n"
+        "«Я ожидал(а) намного страшнее» 💃🏾😍\n\n"
+        "❤️ В первые минуты может ощущаться лёгкая пульсация или чувствительность — "
+        "это абсолютно нормальная реакция организма и быстро проходит!\n\n"
+        "💖 Самое главное — спокойная атмосфера, правильная техника и аккуратность мастера.\n"
+        "🫂 Я всегда стараюсь провести процедуру максимально бережно и комфортно, "
+        "чтобы этот момент прошёл для вас спокойно и уверенно.\n\n"
+        "💖 И уже через несколько минут после прокола остаётся только одно чувство — "
+        "радость от нового красивого украшения 💃🏾💫!\n\n"
+        "💫 Стоит ли оно того?\n"
+        "Если вы давно хотите — однозначно да! Но если сомневаетесь, подумайте ещё 💖 "
+        "Пирсинг не должен быть спонтанным решением.\n\n"
+        "💫 Важно знать:\n"
+        "▫️ Кормить грудью можно, если прокол сделан правильно. Но снимать украшение на время кормления — обязательно.\n\n"
+        "▫️ Заживление:\n"
+        "— Полное заживление 3-6 месяцев (не ведитесь на \"заживёт за месяц\")\n"
+        "— Первые дни: возможна отёчность, повышенная чувствительность\n"
+        "— Никаких бассейнов/пляжей первые 2 месяца\n\n"
+        "🩸 Пирсинг в ПМС\n"
+        "Делать пирсинг в период менструации и ПМС можно, это не является противопоказанием.\n\n"
+        "👉🏽 Но важно понимать, что в эти дни организм может быть немного более чувствительным:\n"
+        "🩸 Повышается болевая чувствительность — из-за гормональных колебаний нервная система реагирует ярче\n"
+        "🩸 Кровоточивость может быть немного сильнее, потому что в этот период меняется свёртываемость крови\n"
+        "🩸 может быстрее появляться отёк и быть чуть выраженнее\n"
+        "🩸 повышается общая чувствительность кожи\n\n"
+        "Поэтому многие предпочитают выбирать для прокола более спокойные дни цикла 🩵\n\n"
+        "Если же запись уже назначена и вы чувствуете себя нормально — переживать не стоит.\n"
+        "💎 Процедура проходит так же быстро и безопасно, а я всегда стараюсь сделать её максимально аккуратно и комфортно для вас 🤍\n\n"
+        "🔆 Самое главное — прислушиваться к своему самочувствию и приходить на процедуру в хорошем состоянии 🩵"
+    )
+    await safe_send_message(message, text)
 
-@dp.message(F.text == "🔧 Почему нужна замена ножки?")
+# --- FAQ: Почему нельзя кольцо? ---
+@dp.message(F.text == "🚫 Почему нельзя кольцо?")
+async def no_ring_faq(message: types.Message):
+    text = (
+        "🚫 Почему нельзя кольцо?\n\n"
+        "🥹 Да, кольца выглядят красиво, но для свежего пирсинга они не самый лучший вариант!\n\n"
+        "💔 Главная проблема — постоянное движение украшения.\n\n"
+        "Кольцо:\n"
+        "• вращается внутри прокола\n"
+        "• постоянно двигается\n"
+        "• может цепляться за волосы, одежду и кожу\n\n"
+        "Из-за этого канал прокола постоянно травмируется, что может привести к:\n"
+        "• раздражению\n"
+        "• образованию «шишек»\n"
+        "• замедлению заживления\n\n"
+        "Поэтому в прокол сначала устанавливаются прямые украшения (лабреты или штанги) — они фиксируют канал и позволяют ему спокойно заживать.\n\n"
+        "💍 После полного заживления украшение легко можно заменить на кольцо.\n\n"
+        "Исключения:\n"
+        "• септум\n"
+        "• дэйс (daith)\n"
+        "В этих зонах анатомия позволяет украшению заживать без лишнего движения и травмирования 🫂"
+    )
+    # Место для фото 1
+    try:
+        photo = FSInputFile("no_ring.jpg")
+        await safe_send_message(message, text, photo=photo)
+    except FileNotFoundError:
+        await safe_send_message(message, text)
+
+# --- FAQ: Почему нельзя золото/серебро? ---
+@dp.message(F.text == "🚫 Почему нельзя золото/серебро?")
+async def no_gold_silver_faq(message: types.Message):
+    text = (
+        "🚫 Почему нельзя золото / серебро?\n\n"
+        "💎 В первичный прокол всегда устанавливаются имплантационные материалы, чаще всего — титан.\n\n"
+        "🚫 Золото и серебро для свежего пирсинга не подходят, и вот почему:\n\n"
+        "• Серебро окисляется при контакте с кожей и жидкостями организма, что может вызывать раздражение и потемнение кожи вокруг прокола.\n\n"
+        "• Золото часто содержит примеси (никель, медь и др.), которые могут вызывать аллергические реакции и замедлять заживление.\n\n"
+        "• Покрытие на украшениях со временем стирается, и основной металл начинает контактировать с раной.\n\n"
+        "👉🏽 Свежий прокол — это по сути открытая рана, поэтому материал украшения должен быть максимально биосовместимым.\n\n"
+        "💎 Поэтому в период заживления используются:\n"
+        "• имплантационный титан\n"
+        "• ниобий\n"
+        "• иногда биопласт\n\n"
+        "✅ Когда можно:\n"
+        "• Золото — через 2-3 месяца после прокола\n"
+        "• Серебро — минимум через 6 месяцев\n\n"
+        "*перед самостоятельной заменой на сторонние материалы нужны консультация и осмотр прокола 🔆"
+    )
+    # Место для фото 2
+    try:
+        photo = FSInputFile("no_gold_silver.jpg")
+        await safe_send_message(message, text, photo=photo)
+    except FileNotFoundError:
+        await safe_send_message(message, text)
+
+# --- FAQ: Замена ножки (даунсайз) ---
+@dp.message(F.text == "🔧 Замена ножки (даунсайз)")
 async def replacement_faq(message: types.Message):
     text = (
         "🚨 Замена ножки (даунсайз) — ВАЖНО\n\n"
@@ -204,23 +478,55 @@ async def replacement_faq(message: types.Message):
         "• изнашиваться в резьбе\n\n"
         "Поэтому периодическая замена украшений — это не только эстетика, но и гигиена и безопасность пирсинга ❤️"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
+    
+    # Место для фото 3-4 (две фотографии)
+    try:
+        media = []
+        for path in ["downsize_1.jpg", "downsize_2.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(path)))
+            except FileNotFoundError:
+                continue
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото: {e}")
 
-# ---------------- INJURY FAQ (заглушка, можно дополнить позже) ----------------
-
+# --- FAQ: Что делать если задел пирсинг? ---
 @dp.message(F.text == "⚠️ Что делать если задел пирсинг?")
 async def injury_faq(message: types.Message):
     text = (
-        "⚠️ ЧТО ДЕЛАТЬ ЕСЛИ ВЫ ЗАДЕЛИ ПИРСИНГ (ВАЖНО!):\n\n"
-        "Я добавлю этот текст позже ⏳\n"
-        "Раздел находится в разработке\n\n"
-        "Следите за обновлениями в нашем Telegram канале:\n"
-        "@GemShopSochi"
+        "⚠️ Что делать если задел пирсинг?\n\n"
+        "💔 Если пирсинг случайно задели, потянули или он зацепился за одежду — чаще всего это не опасно, "
+        "но тканям нужно немного времени, чтобы восстановиться.\n\n"
+        "❤️‍🩹 После такой травмы могут появиться:\n"
+        "• лёгкая болезненность\n"
+        "• небольшая припухлость\n"
+        "• чувствительность при прикосновении\n"
+        "• временное покраснение\n\n"
+        "🔆 Это нормальная реакция тканей на механическое раздражение.\n\n"
+        "✅ Что нужно сделать:\n\n"
+        "💛 Не крутить и не трогать украшение лишний раз.\n"
+        "💛 Продолжать стандартный уход, указанный в памятке.\n"
+        "💛 Стараться не травмировать прокол повторно (одежда, волосы, сон на этой стороне)\n\n"
+        "Обычно такие ситуации проходят самостоятельно в течение нескольких дней.\n\n"
+        "⸻⸻⸻\n"
+        "🔆 Также при проблемах с заживлением можно дополнительно помочь организму, заменив украшение на титан.\n\n"
+        "⸻⸻⸻\n"
+        "❣️ Когда лучше написать мастеру\n\n"
+        "❗ Если через несколько дней отсутствуют какие либо улучшения.\n\n"
+        "❗️ Если вы заметили:\n"
+        "• сильный отёк\n"
+        "• украшение изменило положение\n"
+        "• усиливающуюся пульсирующую боль\n"
+        "• украшение стало слишком коротким\n\n"
+        "📩 При любых сомнениях по состоянию прокола — своевременно сообщите мастеру!\n"
+        "🫂 Я посмотрю ситуацию и подскажу, что лучше сделать."
     )
-    await message.answer(text)
+    await safe_send_message(message, text, reply_markup=get_important_and_photo_inline())
 
-# ---------------- TITAN FAQ (обновлённый текст) ----------------
-
+# --- FAQ: Почему ТИТАН? ---
 @dp.message(F.text == "🔬 Почему ТИТАН?")
 async def titan_faq(message: types.Message):
     text = (
@@ -256,10 +562,9 @@ async def titan_faq(message: types.Message):
         "💎 Правильно подобранное украшение — это половина успеха в заживлении пирсинга!\n"
         "🔆 Поэтому важно выбирать качественные материалы и устанавливать их у профессионального мастера! 🫂🩵"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- NEEDLE FAQ (обновлённый текст, объединён с информацией про пистолет) ----------------
-
+# --- FAQ: Почему только ИГЛА? ---
 @dp.message(F.text == "💉 Почему только ИГЛА?")
 async def needle_faq(message: types.Message):
     text = (
@@ -290,10 +595,9 @@ async def needle_faq(message: types.Message):
         "которые позволяют сделать прокол аккуратно, безопасно и с минимальной травмой для тканей!\n\n"
         "Берегите своё здоровье и доверяйте проколы только профессионалам ❤️"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- ANESTHESIA FAQ (обновлённый текст) ----------------
-
+# --- FAQ: Почему нельзя обезбол? ---
 @dp.message(F.text == "💊 Почему нельзя обезбол?")
 async def anesthesia_faq(message: types.Message):
     text = (
@@ -333,10 +637,9 @@ async def anesthesia_faq(message: types.Message):
         "————————————\n\n"
         "🔆 И, как показывает практика, уже через несколько минут после прокола большинство клиентов полностью забывают о дискомфорте — остаётся только радость от нового украшения 🫂❤️"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- CHILDREN FAQ (обновлённый текст) ----------------
-
+# --- FAQ: Проколы в детском возрасте ---
 @dp.message(F.text == "👶 Проколы в детском возрасте")
 async def children_faq(message: types.Message):
     text = (
@@ -358,10 +661,9 @@ async def children_faq(message: types.Message):
         "Поэтому так важно принимать взвешенные решения и опираться на достоверную информацию, "
         "а не на устоявшиеся, но не всегда безопасные «традиции»"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- NEW: "🥵 Это больно?" ----------------
-
+# --- FAQ: Это больно? ---
 @dp.message(F.text == "🥵 Это больно?")
 async def pain_faq(message: types.Message):
     text = (
@@ -380,43 +682,11 @@ async def pain_faq(message: types.Message):
         "💖 Легкая пульсация 5–10 минут (это нормально).\n"
         "💖 Уже через несколько минут большинство клиентов полностью забывают о дискомфорте и просто радуются новому украшению!"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- NEW: "🥵 А прокол сосков?" ----------------
-
-@dp.message(F.text == "🥵 А прокол сосков?")
-async def nipple_piercing_faq(message: types.Message):
-    text = (
-        "🥵 А прокол сосков?\n\n"
-        "🫶🏽 Я всегда отвечаю честно: да, это один из самых чувствительных проколов, "
-        "потому что соски — очень нервная зона. Ощущения могут быть довольно яркими! 🐠\n\n"
-        "Но есть важный момент — сам прокол длится буквально 1–2 секунды! 💫\n"
-        "И большинство клиентов после процедуры удивлённо говорят:\n"
-        "«Я ожидал(а) намного страшнее» 💃🏾😍\n\n"
-        "❤️ В первые минуты может ощущаться лёгкая пульсация или чувствительность — "
-        "это абсолютно нормальная реакция организма и быстро проходит!\n\n"
-        "💖 Самое главное — спокойная атмосфера, правильная техника и аккуратность мастера.\n"
-        "🫂 Я всегда стараюсь провести процедуру максимально бережно и комфортно, "
-        "чтобы этот момент прошёл для вас спокойно и уверенно.\n\n"
-        "💖 И уже через несколько минут после прокола остаётся только одно чувство — "
-        "радость от нового красивого украшения 💃🏾💫!\n\n"
-        "💫 Стоит ли оно того?\n"
-        "Если вы давно хотите — однозначно да! Но если сомневаетесь, подумайте ещё 💖 "
-        "Пирсинг не должен быть спонтанным решением.\n\n"
-        "💫 Важно знать:\n"
-        "▫️ Кормить грудью можно, если прокол сделан правильно. Но снимать украшение на время кормления — обязательно.\n\n"
-        "▫️ Заживление:\n"
-        "— Полное заживление 3-6 месяцев (не ведитесь на \"заживёт за месяц\")\n"
-        "— Первые дни: возможна отёчность, повышенная чувствительность\n"
-        "— Никаких бассейнов/пляжей первые 2 месяца"
-    )
-    await message.answer(text)
-
-# ---------------- NEW: "❌ Пирсинг и пистолет" (отдельный пункт) ----------------
-
+# --- FAQ: Пирсинг и пистолет ---
 @dp.message(F.text == "❌ Пирсинг и пистолет")
 async def gun_faq(message: types.Message):
-    # Можно использовать тот же текст, что и в needle_faq, или немного сократить
     text = (
         "❌ Пирсинг-пистолет — устаревший и небезопасный способ прокола\n\n"
         "К сожалению, до сих пор можно встретить проколы ушей и хрящей с помощью пистолета.\n"
@@ -442,18 +712,12 @@ async def gun_faq(message: types.Message):
         "❌ Использование нестерильного инструмента, а также украшений из неподходящих металлов для проколов считается недопустимым.\n\n"
         "Берегите своё здоровье и доверяйте проколы только профессионалам ❤️"
     )
-    await message.answer(text)
+    await safe_send_message(message, text)
 
-# ---------------- BACK TO MAIN MENU ----------------
-
-@dp.message(F.text == "🔙 Назад в главное меню")
-async def back_to_main(message: types.Message):
-    await message.answer(
-        "Главное меню:",
-        reply_markup=menu
-    )
-
-# ---------------- PREPARATION ----------------
+# -------------------- Памятки (пирсинг) --------------------
+@dp.message(F.text == "📌 Памятки (пирсинг)")
+async def piercing_memos(message: types.Message):
+    await safe_send_message(message, "Выберите памятку:", reply_markup=piercing_memos_menu)
 
 @dp.message(F.text == "📌 Подготовка к пирсингу ВАЖНО!")
 async def preparation(message: types.Message):
@@ -479,9 +743,7 @@ async def preparation(message: types.Message):
         "⚠️ Если вы плохо себя чувствуете, заболели или не выспались - "
         "лучше перенести запись и предупредить мастера!"
     )
-    await message.answer(text)
-
-# ---------------- GENERAL CARE ----------------
+    await safe_send_message(message, text)
 
 @dp.message(F.text == "🧼 Общий уход за пирсингом")
 async def general_care(message: types.Message):
@@ -515,9 +777,9 @@ async def general_care(message: types.Message):
         "• Сильная боль\n"
         "• Повышение температуры"
     )
-    await message.answer(text)
-
-    # Отправляем изображения, если они есть
+    await safe_send_message(message, text)
+    
+    # Место для фото 5-6
     try:
         media_group = []
         image_paths = ["care_general_1.jpg", "care_general_2.jpg"]
@@ -525,97 +787,350 @@ async def general_care(message: types.Message):
             try:
                 media_group.append(types.InputMediaPhoto(media=FSInputFile(path)))
             except FileNotFoundError:
-                print(f"Файл {path} не найден")
                 continue
         if media_group:
-            await message.answer_media_group(media=media_group)
+            await safe_send_media_group(message, media_group)
     except Exception as e:
-        print(f"Ошибка при отправке изображений: {e}")
-
-# ---------------- ORAL CARE ----------------
+        logger.error(f"Ошибка при отправке изображений: {e}")
 
 @dp.message(F.text == "👄 Уход за пирсингом в ротовой полости")
 async def oral_care(message: types.Message):
     text = (
-        "💖 При любом возникшем вопросе, своевременно напишите мне ! 🫶🏽\n"
-        "Памятка по подготовке:"
+        "👄 УХОД ЗА ПИРСИНГОМ В РОТОВОЙ ПОЛОСТИ\n"
+        "(Язык, губа, уздечка):\n\n"
+        "😛 Отек после прокола языка:\n"
+        "• Это нормально в первые 3-5 дней\n"
+        "• Поможет холодное и рассасывание льда (разово, не систематически)\n"
+        "• При сильном отеке - обратиться к врачу\n\n"
+        "🦷 ПРИЕМ У СТОМАТОЛОГА:\n"
+        "Предупреждайте врача о пирсинге!\n"
+        "🚫 В первые несколько месяцев пирсинг снимать нельзя - он тут же зарастет!\n\n"
+        "💖 При любом возникшем вопросе, своевременно напишите мне ! 🫶🏽"
     )
-    await message.answer(text)
-
+    await safe_send_message(message, text)
+    
+    # Место для фото 7-8
     try:
         media_group = []
-        image_paths = ["care_oral_3.jpg", "care_oral_4.jpg"]
+        image_paths = ["care_oral_1.jpg", "care_oral_2.jpg"]
         for path in image_paths:
             try:
                 media_group.append(types.InputMediaPhoto(media=FSInputFile(path)))
             except FileNotFoundError:
-                print(f"Файл {path} не найден")
                 continue
         if media_group:
-            await message.answer_media_group(media=media_group)
+            await safe_send_media_group(message, media_group)
     except Exception as e:
-        print(f"Ошибка при отправке изображений: {e}")
+        logger.error(f"Ошибка при отправке изображений: {e}")
 
-# ---------------- ADDRESS ----------------
+# -------------------- SOS раздел --------------------
+@dp.message(F.text == "⚠️ SOS")
+async def sos_menu_show(message: types.Message):
+    await safe_send_message(message, "Раздел SOS. Выберите тему:", reply_markup=sos_menu)
 
-@dp.message(F.text == "📍 Адрес студии")
-async def address(message: types.Message):
-    address_text = (
-        "📍 Tattoo.Gem\n"
-        "Московская 10, вход с торца здания\n\n"
-        "➡️ Через охрану на лифт, 5 этаж, с балкона на право\n"
-        "(При входе нужно будет показать кюар код на охране 🧡)\n\n"
-        "➡️ Либо по лестнице на 5 этаж и налево (если охраны нет)\n\n"
-        "Нажмите на звоночек🧡, я открою\n"
-        "💃 На входе надеваем бахилки/тапочки"
-    )
-
-    try:
-        photo = FSInputFile("studio_address.jpg")
-        await message.answer_photo(photo=photo, caption=address_text)
-    except FileNotFoundError:
-        await message.answer(address_text)
-
-    keyboard = InlineKeyboardMarkup(
+# Вспомогательные функции для инлайн-кнопок
+def get_send_photo_inline():
+    return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="🗺 Яндекс Карты", url="https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964")],
-            [InlineKeyboardButton(text="🗺 2ГИС", url="https://2gis.ru/sochi/geo/70000001075813793")],
-            [InlineKeyboardButton(text="📸 Instagram", url="https://instagram.com/tattoo.gem.sochi")],
-            [InlineKeyboardButton(text="📱 Telegram канал (Тату)", url="https://t.me/TattooGemSochi")],
-            [InlineKeyboardButton(text="📱 Telegram канал (Пирсинг)", url="https://t.me/GemShopSochi")]
+            [InlineKeyboardButton(text="💌 Отправить фото мастеру", callback_data="send_photo")]
         ]
     )
-    await message.answer("Наши соцсети и карты:", reply_markup=keyboard)
 
-# ---------------- BOOKING ----------------
+def get_important_and_photo_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="⚠️ Важно", callback_data="show_important")],
+            [InlineKeyboardButton(text="💌 Отправить фото мастеру", callback_data="send_photo")]
+        ]
+    )
 
-@dp.message(F.text == "🖊 Записаться")
-async def booking_start(message: types.Message, state: FSMContext):
-    await message.answer("Введите ваше имя:")
+def get_dynamic_and_photo_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Отправить фото мастеру", callback_data="send_photo")],
+            [InlineKeyboardButton(text="♻️ Сообщить о динамике", callback_data="send_dynamic")]
+        ]
+    )
+
+# --- SOS: Ваш идеальный пирсинг ---
+@dp.message(F.text == "💫 Ваш идеальный пирсинг")
+async def sos_ideal(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Перейти к посту", url="https://t.me/GemShopSochi/1203")]
+        ]
+    )
+    await safe_send_message(message, "Ваш идеальный пирсинг:", reply_markup=keyboard)
+
+# --- SOS: Раскрутился пирсинг ---
+@dp.message(F.text == "💧 Раскрутился пирсинг")
+async def sos_unscrewed(message: types.Message):
+    text = (
+        "💧 Раскрутился пирсинг\n\n"
+        "❤️ Даже если украшение было затянуто правильно (у моих клиентов оно всегда фиксируется надёжно), "
+        "иногда накрутка может раскрутиться или украшение может выпасть. Это случается и не является редкостью!\n\n"
+        "❓ Почему это происходит\n"
+        "——————————————\n"
+        "💫 Спад отёка\n"
+        "После прокола ткани постепенно уменьшаются, поэтому украшение начинает сидеть свободнее.\n\n"
+        "💫 Механическое воздействие\n"
+        "Пирсинг можно случайно зацепить одеждой, волосами или постельным бельём во сне.\n\n"
+        "💫 Анатомические особенности\n"
+        "Некоторые зоны (например ноздря или губа) чаще подвергаются случайным касаниям.\n\n"
+        "💫 Ослабление фиксации\n"
+        "Даже качественная накрутка со временем может немного раскрутиться.\n\n"
+        "❓ Как этого избежать\n"
+        "——————————————\n"
+        "✅ После спада отёка важно вовремя заменить украшение на более короткое\n"
+        "✅ Проверять фиксацию накрутки 1–2 раза в день чистыми руками. Особенно перед сном, особенно в проколе крыла носа 🫂\n"
+        "✅ Использовать качественные украшения из титана с надёжной резьбой.\n"
+        "✅ Желательно иметь запасное украшение на случай экстренной ситуации.\n\n"
+        "⁉️ Что делать, если украшение все же выпало\n"
+        "——————————————\n"
+        "Если прокол свежий — действовать нужно быстро, канал может начать закрываться 💔\n\n"
+        "💛 Попробуйте аккуратно вернуть украшение на место.\n"
+        "💛 Если не получается — если это лабрет, можно временно вставить ножку в прокол обратной стороной, чтобы сохранить канал до визита к мастеру\n"
+        "💌 Затем сразу написать мастеру и прислать фото.\n\n"
+        "Я всегда помогу разобраться и подскажу, как лучше решить ситуацию 🫂💫\n\n"
+        "⸻\n"
+        "💬 Важно: пирсинг — это маленькая конструкция, которая требует внимания. "
+        "При правильном украшении и своевременном уходе он спокойно носится годами без проблем 💛"
+    )
+    await safe_send_message(message, text, reply_markup=get_send_photo_inline())
+    
+    # Место для фото 9
+    try:
+        photo = FSInputFile("unscrewed.jpg")
+        await safe_send_message(message, "Фото:", photo=photo)
+    except FileNotFoundError:
+        pass
+
+# --- SOS: Как быстро зарастает прокол ---
+@dp.message(F.text == "❣️ Как быстро зарастает прокол")
+async def sos_heal_speed(message: types.Message):
+    text = (
+        "❣️ Как быстро зарастает прокол\n\n"
+        "☀️ Скорость закрытия прокола зависит от срока ношения украшения и зоны пирсинга.\n\n"
+        "Если пирсинг носился больше года, вероятность того, что прокол полностью зарастёт, очень маленькая. "
+        "За это время стенки канала формируются и покрываются рубцовой тканью. Канал может сильно уменьшиться, но полностью исчезает редко.\n\n"
+        "⭐️ В таких случаях я могу сделать восстановление канала, чтобы аккуратно вернуть украшение без нового прокола.\n\n"
+        "⸻⸻⸻\n"
+        "❣️ Но если украшение снять на стадии заживления, ситуация совсем другая.\n\n"
+        "❗️ Свежий прокол может начать стягиваться очень быстро — иногда уже через 10-15 минут.\n"
+        "❗️ Особенно это касается мягких тканей: губ, языка, щёк и некоторых хрящевых проколов.\n\n"
+        "Поэтому вернуть украшение обратно без дискомфорта или усилий иногда уже не получается.\n\n"
+        "⸻⸻⸻\n"
+        "💛 Поэтому перед тем как снимать украшение или делать что-то вне рекомендаций по уходу — "
+        "лучше написать мне и уточнить, как правильно поступить.\n\n"
+        "💌 Иногда это помогает сохранить прокол и избежать повторной процедуры."
+    )
+    await safe_send_message(message, text, reply_markup=get_send_photo_inline())
+
+# --- SOS: Задели пирсинг ---
+@dp.message(F.text == "💧 Задели пирсинг")
+async def sos_hit(message: types.Message):
+    text = (
+        "💧 Задели пирсинг\n\n"
+        "💔 Если пирсинг случайно задели, потянули или он зацепился за одежду — чаще всего это не опасно, "
+        "но тканям нужно немного времени, чтобы восстановиться.\n\n"
+        "❤️‍🩹 После такой травмы могут появиться:\n"
+        "• лёгкая болезненность\n"
+        "• небольшая припухлость\n"
+        "• чувствительность при прикосновении\n"
+        "• временное покраснение\n\n"
+        "🔆 Это нормальная реакция тканей на механическое раздражение.\n\n"
+        "✅ Что нужно сделать:\n\n"
+        "💛 Не крутить и не трогать украшение лишний раз.\n"
+        "💛 Продолжать стандартный уход, указанный в памятке.\n"
+        "💛 Стараться не травмировать прокол повторно (одежда, волосы, сон на этой стороне)\n\n"
+        "Обычно такие ситуации проходят самостоятельно в течение нескольких дней.\n\n"
+        "⸻⸻⸻\n"
+        "🔆 Также при проблемах с заживлением можно дополнительно помочь организму, заменив украшение на титан.\n\n"
+        "⸻⸻⸻\n"
+        "❣️ Когда лучше написать мастеру\n\n"
+        "❗ Если через несколько дней отсутствуют какие либо улучшения.\n\n"
+        "❗️ Если вы заметили:\n"
+        "• сильный отёк\n"
+        "• украшение изменило положение\n"
+        "• усиливающуюся пульсирующую боль\n"
+        "• украшение стало слишком коротким\n\n"
+        "📩 При любых сомнениях по состоянию прокола — своевременно сообщите мастеру!\n"
+        "🫂 Я посмотрю ситуацию и подскажу, что лучше сделать."
+    )
+    await safe_send_message(message, text, reply_markup=get_important_and_photo_inline())
+
+# --- SOS: Появился нарост/уплотнение ---
+@dp.message(F.text == "💧 Появился нарост/уплотнение")
+async def sos_bump(message: types.Message):
+    text = (
+        "💧 Появился нарост / уплотнение\n\n"
+        "Во время заживления пирсинга иногда может появиться "
+        "пустула, гранулёма, уплотнение или мокрое воспаление возле канала.\n\n"
+        "Это происходит всего по двум причинам:\n\n"
+        "💔 украшение постоянно двигается\n"
+        "— задеваем, крутим, играем с пирсингом\n"
+        "— спим на проколе\n"
+        "— цепляем одеждой или волосами\n\n"
+        "💔 не сделали своевременный даунсайз\n"
+        "— когда длинная ножка остаётся после спада отёка\n"
+        "— украшение начинает ходить вверх-вниз внутри канала\n\n"
+        "💧 Когда прокол постоянно травмируется, организм включает защитную реакцию и начинает создавать вокруг канала ткань, "
+        "чтобы стабилизировать украшение.\n\n"
+        "Поэтому появляется нарост или пузырёк.\n\n"
+        "⚠️ Даже небольшое уплотнение — это уже сигнал, что канал раздражён.\n"
+        "Само по себе такое состояние редко проходит, и со временем воспаление может увеличиваться.\n\n"
+        "⸻⸻⸻\n"
+        "💌 Если вы столкнулись с такой ситуацией — не пугайтесь.\n"
+        "Просто своевременно напишите мне, и я подскажу, как правильно решить проблему 🫂"
+    )
+    await safe_send_message(message, text, reply_markup=get_send_photo_inline())
+
+# --- SOS: Сильный оттек пирсинга ---
+@dp.message(F.text == "❤️‍🩹 Сильный оттек пирсинга")
+async def sos_swelling(message: types.Message):
+    text = (
+        "❤️‍🩹 СИЛЬНЫЙ ОТТЕК\n\n"
+        "Если после травмы или реакции организма пирсинг сильно опух, начал пульсировать или давить на ткани, "
+        "важно быстро снять воспаление и уменьшить отёк! ❤️‍🩹\n\n"
+        "🫧 СРАЗУ СООБЩИТЕ ОБ ЭТОМ МНЕ И КАК МОЖНО СКОРЕЕ сделайте:\n\n"
+        "1. 💛 Солевые примочки / компресс\n\n"
+        "Как можно скорее сделайте солевую повязку минимум на 1 час.\n\n"
+        "💧 Раствор готовится так:\n"
+        "• 150 мл тёплой кипячёной воды\n"
+        "• примерно 1 чайная ложка обычной соли\n\n"
+        "Получается раствор концентрацией примерно 8–10%.\n\n"
+        "Повязку держим около 1 часа, после чего аккуратно снимаем её и хорошо промываем кожу от остатков соли.\n\n"
+        "💫 Такие компрессы помогают уменьшить воспаление и снять сильный отёк.\n\n"
+        "2. 💛 Мазь\n\n"
+        "После снятия компресса нужно нанести:\n"
+        "• Левомеколь\n"
+        "или\n"
+        "• Левометил\n\n"
+        "Нанести тонким слоем и сделать повязку на ночь или на несколько часов днём.\n\n"
+        "⚠️ Такие мази используются только короткий период, пока есть выраженное воспаление.\n"
+        "После того как боль и пульсация уменьшаются — мазь лучше убрать.\n\n"
+        "3. 💛 Дальнейший уход\n"
+        "Когда сильная боль ушла, переходим на более щадящий уход.\n\n"
+        "2 раза в день:\n"
+        "✔️ промыть прокол физраствором или солевым раствором\n"
+        "✔️ аккуратно очистить кожу от выделений\n\n"
+        "При необходимости можно дополнительно обработать прокол Мирамистином.\n\n"
+        "Без длительных компрессов.\n\n"
+        "4. 💛 Дополнительно\n\n"
+        "✔️ Холод на область прокола\n"
+        "5–7 минут, 1–2 раза в день\n\n"
+        "✔️ Не трогать и не крутить украшение\n\n"
+        "✔️ Избегать давления на ухо\n"
+        "(сон на стороне прокола, наушники, плотные шапки)\n\n"
+        "⸻⸻⸻⸻\n"
+        "✅ При выраженном отёке\n\n"
+        "Если лечащий врач ранее разрешал:\n\n"
+        "• можно сразу же принять ибупрофен\n"
+        "• можно принять антигистаминный препарат\n\n"
+        "🔆 Это помогает уменьшить воспалительную реакцию тканей.\n\n"
+        "⸻⸻⸻⸻\n"
+        "❌ Чего делать не нужно\n\n"
+        "🚫 Частые компрессы — они размягчают хрящ\n"
+        "🚫 Спирт\n"
+        "🚫 Перекись\n"
+        "🚫 Йод\n"
+        "🚫 Долго использовать мази с антибиотиком\n\n"
+        "⸻⸻⸻⸻\n"
+        "☀️ Нормальная динамика\n\n"
+        "Ситуация считается контролируемой, если:\n\n"
+        "• боль уменьшается\n"
+        "• отёк постепенно спадает\n"
+        "• нет жёлто-зелёных выделений\n"
+        "• ухо не горячее и не «горит»"
+    )
+    await safe_send_message(message, text, reply_markup=get_dynamic_and_photo_inline())
+
+# -------------------- Инлайн-обработчики SOS --------------------
+@dp.callback_query(F.data == "send_photo")
+async def inline_send_photo(callback: types.CallbackQuery, state: FSMContext):
+    await safe_send_message(callback.message, "Пожалуйста, отправьте фото (как файл или изображение).")
+    await state.set_state(SendPhoto.waiting_for_photo)
+    await callback.answer()
+
+@dp.callback_query(F.data == "show_important")
+async def inline_show_important(callback: types.CallbackQuery):
+    important_text = (
+        "⚠️ Важно\n\n"
+        "Перед использованием любых лекарственных средств внимательно ознакомьтесь с инструкцией к препарату.\n\n"
+        "Если у вас есть аллергии, хронические заболевания кожи или сомнения по поводу применения, "
+        "рекомендуется предварительно проконсультироваться с врачом.\n\n"
+        "Каждый организм индивидуален, поэтому важно убедиться, что выбранное средство подходит именно вам."
+    )
+    await safe_send_message(callback.message, important_text, reply_markup=get_send_photo_inline())
+    await callback.answer()
+
+@dp.callback_query(F.data == "send_dynamic")
+async def inline_send_dynamic(callback: types.CallbackQuery, state: FSMContext):
+    await safe_send_message(callback.message, "Опишите динамику и при необходимости пришлите фото.")
+    await safe_send_message(callback.message, "Пожалуйста, отправьте фото (если нужно) и напишите текстом о динамике.")
+    await state.set_state(SendPhoto.waiting_for_photo)
+    await callback.answer()
+
+# -------------------- Обработчик фото для отправки мастеру --------------------
+@dp.message(SendPhoto.waiting_for_photo, F.photo | F.document)
+async def handle_photo_to_admin(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    username = message.from_user.username or "нет username"
+    caption = f"Фото от пользователя {user_id} (@{username})"
+    
+    try:
+        if message.photo:
+            file_id = message.photo[-1].file_id
+            await bot.send_photo(ADMIN_ID, file_id, caption=caption)
+        elif message.document:
+            file_id = message.document.file_id
+            await bot.send_document(ADMIN_ID, file_id, caption=caption)
+        await safe_send_message(message, "Фото отправлено мастеру. Ожидайте ответа.")
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото админу: {e}")
+        await safe_send_message(message, "Произошла ошибка при отправке фото. Попробуйте позже.")
+    
+    await state.clear()
+
+@dp.message(SendPhoto.waiting_for_photo)
+async def handle_photo_invalid(message: types.Message, state: FSMContext):
+    await safe_send_message(message, "Пожалуйста, отправьте фото (изображение или файл).")
+
+# -------------------- Отправка фото мастеру (кнопка из меню) --------------------
+@dp.message(F.text == "💌 Прислать фото мастеру")
+async def send_photo_to_master(message: types.Message, state: FSMContext):
+    await safe_send_message(message, "Отправьте фото, и я перешлю его мастеру.")
+    await state.set_state(SendPhoto.waiting_for_photo)
+
+# -------------------- Запись на пирсинг --------------------
+@dp.message(F.text == "🖊 Записаться на пирсинг")
+async def booking_start_piercing(message: types.Message, state: FSMContext):
+    await state.update_data(service_type="piercing")
+    await safe_send_message(message, "Введите ваше имя:")
     await state.set_state(Booking.name)
 
 @dp.message(Booking.name)
 async def booking_name(message: types.Message, state: FSMContext):
     await state.update_data(name=message.text)
-    await message.answer("Количество полных лет:")
+    await safe_send_message(message, "Количество полных лет:")
     await state.set_state(Booking.age)
 
 @dp.message(Booking.age)
 async def booking_age(message: types.Message, state: FSMContext):
     await state.update_data(age=message.text)
-    await message.answer("Введите услугу (например: прокол хряща):")
+    await safe_send_message(message, "Введите услугу (например: прокол хряща):")
     await state.set_state(Booking.service)
 
 @dp.message(Booking.service)
 async def booking_service(message: types.Message, state: FSMContext):
     await state.update_data(service=message.text)
-    await message.answer("Введите дату (например 20.05):")
+    await safe_send_message(message, "Введите желаемую дату (например 20.05):")
     await state.set_state(Booking.date)
 
 @dp.message(Booking.date)
 async def booking_date(message: types.Message, state: FSMContext):
     await state.update_data(date=message.text)
-    await message.answer("Введите время (например 16:00):")
+    await safe_send_message(message, "Введите желаемое время (например 16:00):")
     await state.set_state(Booking.time)
 
 @dp.message(Booking.time)
@@ -628,7 +1143,7 @@ async def booking_time(message: types.Message, state: FSMContext):
         "После оплаты пришлите пожалуйста чек 💌💫\n"
         "(можно отправить скриншот или фото чека)"
     )
-    await message.answer(payment_text)
+    await safe_send_message(message, payment_text)
     await state.set_state(Booking.payment_check)
 
 @dp.message(Booking.payment_check)
@@ -641,14 +1156,12 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
     time = data["time"]
     user_id = message.from_user.id
 
-    # Сохраняем чек (фото или документ)
     receipt_file_id = None
     if message.photo:
         receipt_file_id = message.photo[-1].file_id
     elif message.document:
         receipt_file_id = message.document.file_id
 
-    # Кнопки для администратора
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="✅ Запись состоялась", callback_data=f"done_{user_id}")],
@@ -656,9 +1169,8 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
         ]
     )
 
-    # Отправляем уведомление админу (БЕЗ СОХРАНЕНИЯ В БД)
     admin_message = (
-        f"Новая запись (оплачено):\n\n"
+        f"Новая запись (пирсинг, оплачено):\n\n"
         f"Имя: {name}\n"
         f"Возраст: {age}\n"
         f"Услуга: {service}\n"
@@ -667,14 +1179,16 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
         f"Статус: Предоплата получена"
     )
 
-    if receipt_file_id and message.photo:
-        await bot.send_photo(ADMIN_ID, receipt_file_id, caption=admin_message, reply_markup=keyboard)
-    elif receipt_file_id and message.document:
-        await bot.send_document(ADMIN_ID, receipt_file_id, caption=admin_message, reply_markup=keyboard)
-    else:
-        await bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
+    try:
+        if receipt_file_id and message.photo:
+            await bot.send_photo(ADMIN_ID, receipt_file_id, caption=admin_message, reply_markup=keyboard)
+        elif receipt_file_id and message.document:
+            await bot.send_document(ADMIN_ID, receipt_file_id, caption=admin_message, reply_markup=keyboard)
+        else:
+            await bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке уведомления админу: {e}")
 
-    # Отправляем клиенту адрес и информацию
     address_text = (
         "✅ Заявка отправлена мастеру! Спасибо за предоплату 💫\n\n"
         "📍 Tattoo.Gem\n"
@@ -689,29 +1203,34 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
 
     try:
         photo = FSInputFile("studio_address.jpg")
-        await message.answer_photo(photo=photo, caption=address_text)
+        await safe_send_message(message, address_text, photo=photo)
     except FileNotFoundError:
-        await message.answer(address_text)
+        await safe_send_message(message, address_text)
 
     await state.clear()
 
-# ---------------- ADMIN CONFIRM ----------------
+# -------------------- Запись на тату --------------------
+@dp.message(F.text == "💌 Записаться на сеанс тату")
+async def booking_start_tattoo(message: types.Message, state: FSMContext):
+    await state.update_data(service_type="tattoo")
+    await safe_send_message(message, "Введите ваше имя:")
+    await state.set_state(Booking.name)
 
+# -------------------- Админ подтверждение --------------------
 @dp.callback_query(F.data.startswith("done_"))
 async def booking_done(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
 
-    await bot.send_message(
+    await safe_send_message(
         user_id,
         "Спасибо за визит в нашу студию! 💖\n\n"
-        "Если будет время и настроение, буду рада вашей обратной связи \n"
-        "😍 о проделанной работе 🫧/ об атмосфере студии ✨ или "
-        "ваших личных впечатлениях! 🫂 \n"
+        "Если будет время и настроение, буду рада вашей обратной связи 😍 о проделанной работе 🫧/ об атмосфере студии ✨ или "
+        "ваших личных впечатлениях! 🫂\n"
         "О плановой замене ножки Вам придет напоминание через две недели !🫧\n"
-        "Ваш мастер Veronika Gem 🫶🏽"
+        "Ваш мастер Veronika Gem 🫶🏽",
+        reply_markup=get_review_keyboard()
     )
 
-    # Запланировать напоминание об отзыве через 2 дня
     scheduler.add_job(
         send_review_reminder,
         "date",
@@ -719,7 +1238,6 @@ async def booking_done(callback: types.CallbackQuery):
         args=[user_id]
     )
 
-    # Запланировать напоминание о замене ножки через 2 недели
     scheduler.add_job(
         send_replacement_reminder,
         "date",
@@ -727,17 +1245,202 @@ async def booking_done(callback: types.CallbackQuery):
         args=[user_id]
     )
 
+    scheduler.add_job(
+        send_tattoo_3months_reminder,
+        "date",
+        run_date=datetime.now() + timedelta(days=90),
+        args=[user_id]
+    )
+
     await callback.answer("✅ Клиент отмечен, напоминания запланированы")
+
+def get_review_keyboard():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Хотите оставить отзыв? 😍❤️", callback_data="ask_review")]
+        ]
+    )
+
+@dp.callback_query(F.data == "ask_review")
+async def ask_review(callback: types.CallbackQuery):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🧡 Яндекс Карты", url="https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964")],
+            [InlineKeyboardButton(text="🧡 2ГИС", url="https://2gis.ru/sochi/geo/70000001075813793")],
+            [InlineKeyboardButton(text="📸 Instagram", url="https://instagram.com/tattoo.gem.sochi")],
+            [InlineKeyboardButton(text="📱 Telegram Тату", url="https://t.me/TattooGemSochi")],
+            [InlineKeyboardButton(text="📱 Telegram Пирсинг", url="https://t.me/GemShopSochi")]
+        ]
+    )
+    await safe_send_message(callback.message, "Будем благодарны за ваш отзыв! 💕", reply_markup=keyboard)
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("check_payment_"))
 async def check_payment(callback: types.CallbackQuery):
     await callback.answer("Оплата подтверждена")
     await callback.message.edit_reply_markup(reply_markup=None)
 
-# ---------------- REMINDERS ----------------
+# -------------------- Тату раздел --------------------
+@dp.message(F.text == "✍️ Тату")
+async def tattoo_main(message: types.Message):
+    text = (
+        "Татуировка — это личная история, рассказанная через искусство.\n"
+        "История, которая остаётся с вами на всю жизнь ☀️\n"
+        "Пусть каждая её линия будет такой же уникальной, как и вы !✍🏽💫"
+    )
+    await safe_send_message(message, text, reply_markup=tattoo_main_menu)
 
+@dp.message(F.text == "🔙 Назад в меню тату")
+async def back_to_tattoo_main(message: types.Message):
+    await safe_send_message(message, "Меню тату:", reply_markup=tattoo_main_menu)
+
+@dp.message(F.text == "❓ Популярные вопросы (тату)")
+async def tattoo_faq(message: types.Message):
+    await safe_send_message(message, "Выберите вопрос:", reply_markup=tattoo_faq_menu)
+
+@dp.message(F.text == "📌 Стоимость татуировки")
+async def tattoo_price(message: types.Message):
+    text = (
+        "📌 Стоимость татуировки зависит от:\n"
+        "• размера и сложности эскиза\n"
+        "• места нанесения\n"
+        "• времени работы мастера\n\n"
+        "Минимальная стоимость сеанса — 3000₽ (1 час).\n"
+        "Более точную цену можно узнать после консультации с мастером."
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "💔 Больно ли делать тату")
+async def tattoo_pain(message: types.Message):
+    text = (
+        "💔 Больно ли делать тату?\n\n"
+        "Болевые ощущения зависят от места нанесения и вашего болевого порога.\n"
+        "Самые чувствительные зоны: рёбра, стопы, внутренняя поверхность рук.\n"
+        "Менее болезненные: плечи, предплечья, бёдра.\n\n"
+        "Современные мастера используют анестезирующие средства, которые значительно снижают дискомфорт.\n"
+        "В любом случае, это терпимо, и результат того стоит!"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "✍🏽 Про создание эскиза")
+async def tattoo_design(message: types.Message):
+    text = (
+        "✍🏽 Создание эскиза\n\n"
+        "Эскиз разрабатывается индивидуально с учётом ваших пожеланий и анатомии.\n"
+        "Вы можете принести свои идеи, референсы, или довериться мастеру.\n"
+        "Эскиз утверждается до начала сеанса, и вы можете вносить правки."
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "🩶 Мифы о татуировках")
+async def tattoo_myths(message: types.Message):
+    text = (
+        "🩶 Мифы о татуировках\n\n"
+        "❌ Татуировки болят невыносимо — всё индивидуально, современные средства помогают.\n"
+        "❌ Татуировки выцветают через пару лет — при правильном уходе они остаются яркими долго.\n"
+        "❌ Нельзя делать тату, если есть родинки — можно, но мастер обойдёт их.\n"
+        "❌ Татуировки опасны заражением — при работе в стерильных условиях риск минимален."
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "☀️ Тату летом")
+async def tattoo_summer(message: types.Message):
+    text = (
+        "☀️ Тату летом\n\n"
+        "Делать тату летом можно, но нужно быть осторожнее:\n"
+        "• избегать солнца на свежей татуировке (носить закрытую одежду или использовать SPF 50+ после заживления)\n"
+        "• не посещать бассейны, сауны, пляжи до полного заживления\n"
+        "• следить за гигиеной, чтобы избежать инфекций"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "✍🏽 Коррекции")
+async def tattoo_correction(message: types.Message):
+    text = (
+        "✍🏽 Коррекция татуировки\n\n"
+        "Коррекция может потребоваться, если:\n"
+        "• краска легла неравномерно\n"
+        "• появились светлые участки после заживления\n"
+        "• вы хотите изменить детали\n\n"
+        "Коррекция обычно делается через 1-3 месяца после первичного сеанса.\n"
+        "Стоимость зависит от объёма работы."
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "📌 Памятки (тату)")
+async def tattoo_memos(message: types.Message):
+    await safe_send_message(message, "Выберите памятку:", reply_markup=tattoo_memos_menu)
+
+@dp.message(F.text == "🖤 Подготовка к сеансу тату")
+async def tattoo_prep(message: types.Message):
+    text = (
+        "🖤 Подготовка к сеансу тату\n\n"
+        "✅ За день до:\n"
+        "• не употреблять алкоголь\n"
+        "• не принимать кроворазжижающие препараты\n"
+        "• выспаться\n\n"
+        "✅ За 2-3 часа:\n"
+        "• плотно поесть\n"
+        "• пить воду\n\n"
+        "✅ Непосредственно:\n"
+        "• принять душ\n"
+        "• нанести увлажняющий крем на место будущей тату (за час)\n"
+        "• надеть удобную одежду, открывающую доступ к зоне"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "🖤 Уход за тату (пленка)")
+async def tattoo_aftercare_film(message: types.Message):
+    text = (
+        "🖤 Уход за тату (пленка)\n\n"
+        "Если мастер заклеил тату плёнкой (Suprasorb и т.п.):\n"
+        "• носить плёнку 2-4 дня (точное время скажет мастер)\n"
+        "• под плёнкой может скапливаться сукровица — это нормально\n"
+        "• не мочить плёнку в душе (можно быстро ополоснуться, не направляя струю на плёнку)\n"
+        "• после снятия плёнки аккуратно промыть тату водой с мылом, обсушить бумажным полотенцем\n"
+        "• далее увлажнять заживляющей мазью/кремом по рекомендации мастера"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "🖤 Уход за тату (мазь)")
+async def tattoo_aftercare_ointment(message: types.Message):
+    text = (
+        "🖤 Уход за тату (мазь)\n\n"
+        "Если мастер использовал классический метод (заживление без плёнки):\n"
+        "• первые дни промывать тату водой с мылом 2-3 раза в день\n"
+        "• наносить тонкий слой заживляющей мази (Бепантен, Д-пантенол и т.п.)\n"
+        "• не допускать пересыхания, но и не переувлажнять\n"
+        "• не чесать, не ковырять корочки\n"
+        "• носить свободную одежду, не натирающую тату"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "💔 Не следуете рекомендациям")
+async def tattoo_no_care(message: types.Message):
+    text = (
+        "💔 Что будет, если не следовать рекомендациям?\n\n"
+        "• замедленное заживление\n"
+        "• потеря яркости и чёткости линий\n"
+        "• риск инфекции\n"
+        "• образование рубцов\n"
+        "• необходимость дорогостоящей коррекции\n\n"
+        "Пожалуйста, ухаживайте за татуировкой правильно — это залог её красоты и вашего здоровья!"
+    )
+    await safe_send_message(message, text)
+
+# -------------------- Связаться с мастером --------------------
+@dp.message(F.text == "📞 Связаться с мастером")
+async def contact_master(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Написать мастеру", url="https://t.me/Veronikagem")]
+        ]
+    )
+    await safe_send_message(message, "Напишите мастеру напрямую:", reply_markup=keyboard)
+
+# -------------------- Функции напоминаний --------------------
 async def send_review_reminder(user_id: int):
-    review_text = (
+    text = (
         "Буду благодарна за ваш отзыв 🥰\n\n"
         "🤍 Tattoo.Gem — Яндекс Карты\n"
         "https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964\n\n"
@@ -759,13 +1462,13 @@ async def send_review_reminder(user_id: int):
         ]
     )
     try:
-        await bot.send_message(user_id, review_text, reply_markup=keyboard, disable_web_page_preview=False)
+        await safe_send_message(user_id, text, reply_markup=keyboard)
     except Exception as e:
-        print(f"Ошибка при отправке напоминания об отзыве: {e}")
+        logger.error(f"Ошибка при отправке напоминания об отзыве: {e}")
 
 async def send_replacement_reminder(user_id: int):
     try:
-        await bot.send_message(
+        await safe_send_message(
             user_id,
             "🔔 Напоминание о плановой замене украшения!\n\n"
             "Прошло 2 недели с момента прокола - самое время записаться на замену "
@@ -774,22 +1477,55 @@ async def send_replacement_reminder(user_id: int):
             "Если украшение уже заменили - просто проигнорируйте это сообщение 💫"
         )
     except Exception as e:
-        print(f"Ошибка при отправке напоминания о замене: {e}")
+        logger.error(f"Ошибка при отправке напоминания о замене: {e}")
 
-# ---------------- MAIN ----------------
-
-async def on_startup():
-    print("="*50)
-    print("🚀 БОТ Tattoo.Gem ЗАПУЩЕН")
-    print(f"ADMIN_ID = {ADMIN_ID}")
-    print("="*50)
+async def send_tattoo_3months_reminder(user_id: int):
+    text = (
+        "☀️ Прошло 3 месяца с момента вашего визита!\n"
+        "Полное заживление татуировки занимает около 3 месяцев — это время, когда пигмент окончательно закрепляется в коже.\n"
+        "Теперь вы можете оценить, как выглядит татуировка, и решить, нужна ли коррекция.\n\n"
+        "Если хотите записаться на коррекцию или просто показать, как зажило, напишите мне 💌"
+    )
     try:
-        await bot.send_message(
+        await safe_send_message(user_id, text)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке напоминания о 3 месяцах: {e}")
+
+# -------------------- Fallback --------------------
+@dp.message()
+async def fallback(message: types.Message):
+    await safe_send_message(
+        message,
+        "Пожалуйста, выберите пункт из меню 👇",
+        reply_markup=start_menu
+    )
+
+# -------------------- Обработка ошибок --------------------
+@dp.errors()
+async def errors_handler(event: types.ErrorEvent):
+    logger.error(f"Произошла ошибка: {event.exception}")
+    try:
+        if event.update.message:
+            await safe_send_message(
+                event.update.message,
+                "Произошла техническая ошибка. Попробуйте позже или используйте /cancel для сброса."
+            )
+    except:
+        pass
+
+# -------------------- Запуск --------------------
+async def on_startup():
+    logger.info("="*50)
+    logger.info("🚀 БОТ Tattoo.Gem ЗАПУЩЕН (полная версия с обработкой ошибок)")
+    logger.info(f"ADMIN_ID = {ADMIN_ID}")
+    logger.info("="*50)
+    try:
+        await safe_send_message(
             ADMIN_ID,
             f"✅ Бот Tattoo.Gem успешно запущен и работает!\nВремя запуска: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         )
     except Exception as e:
-        print(f"❌ Не удалось отправить сообщение админу: {e}")
+        logger.error(f"❌ Не удалось отправить сообщение админу: {e}")
 
 async def main():
     await on_startup()
