@@ -59,6 +59,7 @@ start_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="💎 Пирсинг")],
         [KeyboardButton(text="✍️ Тату")],
+        [KeyboardButton(text="📚 Обучение")],
         [KeyboardButton(text="📞 Связаться с мастером")]
     ],
     resize_keyboard=True,
@@ -137,6 +138,7 @@ tattoo_main_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="💌 Прислать фото мастеру")],
         [KeyboardButton(text="📍 Адрес студии")],
         [KeyboardButton(text="📌 Памятки (тату)")],
+        [KeyboardButton(text="🎨 Про пигменты")],
         [KeyboardButton(text="🔙 Назад к выбору")]
     ],
     resize_keyboard=True
@@ -145,12 +147,12 @@ tattoo_main_menu = ReplyKeyboardMarkup(
 # Меню "Популярные вопросы (тату)"
 tattoo_faq_menu = ReplyKeyboardMarkup(
     keyboard=[
-        [KeyboardButton(text="📌 Стоимость татуировки")],
+        [KeyboardButton(text="✨ Стоимость татуировки")],
         [KeyboardButton(text="💔 Больно ли делать тату")],
         [KeyboardButton(text="✍🏽 Про создание эскиза")],
         [KeyboardButton(text="🩶 Мифы о татуировках")],
         [KeyboardButton(text="☀️ Тату летом")],
-        [KeyboardButton(text="✍🏽 Коррекции")],
+        [KeyboardButton(text="❗️ Коррекции")],
         [KeyboardButton(text="🔙 Назад в меню тату")]
     ],
     resize_keyboard=True
@@ -164,6 +166,18 @@ tattoo_memos_menu = ReplyKeyboardMarkup(
         [KeyboardButton(text="🖤 Уход за тату (мазь)")],
         [KeyboardButton(text="💔 Не следуете рекомендациям")],
         [KeyboardButton(text="🔙 Назад в меню тату")]
+    ],
+    resize_keyboard=True
+)
+
+# Главное меню Обучения
+training_main_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="📚 О программе обучения")],
+        [KeyboardButton(text="💰 Стоимость и форматы")],
+        [KeyboardButton(text="📅 Узнать свободные даты")],
+        [KeyboardButton(text="💌 Задать вопрос по обучению")],
+        [KeyboardButton(text="🔙 Назад к выбору")]
     ],
     resize_keyboard=True
 )
@@ -1178,50 +1192,173 @@ async def booking_start_piercing(message: types.Message, state: FSMContext):
 
 @dp.message(Booking.name)
 async def booking_name(message: types.Message, state: FSMContext):
-    await state.update_data(name=message.text)
+    name = message.text.strip()
+    
+    # Валидация имени: только буквы (русские и английские), пробелы и дефисы
+    if not name or len(name) < 2:
+        await safe_send_message(message, "❌ Имя слишком короткое. Пожалуйста, введите ваше настоящее имя (минимум 2 символа):")
+        return
+    
+    if len(name) > 50:
+        await safe_send_message(message, "❌ Имя слишком длинное. Пожалуйста, введите корректное имя (максимум 50 символов):")
+        return
+    
+    # Проверка на наличие только букв, пробелов и дефисов
+    if not re.match(r'^[а-яА-ЯёЁa-zA-Z\s\-]+$', name):
+        await safe_send_message(message, "❌ Имя может содержать только буквы, пробелы и дефисы. Пожалуйста, введите корректное имя:")
+        return
+    
+    await state.update_data(name=name)
     await safe_send_message(message, "Количество полных лет:")
     await state.set_state(Booking.age)
 
 @dp.message(Booking.age)
 async def booking_age(message: types.Message, state: FSMContext):
-    await state.update_data(age=message.text)
-    await safe_send_message(message, "Введите услугу (например: прокол хряща):")
+    age_text = message.text.strip()
+    
+    # Валидация возраста: только цифры
+    if not age_text.isdigit():
+        await safe_send_message(message, "❌ Возраст должен быть числом. Пожалуйста, введите ваш возраст цифрами (например: 25):")
+        return
+    
+    age = int(age_text)
+    
+    # Проверка диапазона возраста
+    if age < 14:
+        await safe_send_message(message, "❌ К сожалению, мы не можем принять запись для лиц младше 14 лет. Для записи необходимо присутствие родителей.")
+        await state.clear()
+        return
+    
+    if age > 100:
+        await safe_send_message(message, "❌ Пожалуйста, введите корректный возраст:")
+        return
+    
+    await state.update_data(age=age_text)
+    
+    # Получаем тип услуги для правильного текста
+    data = await state.get_data()
+    service_type = data.get("service_type", "piercing")
+    
+    if service_type == "tattoo":
+        await safe_send_message(message, "Опишите желаемую татуировку (например: маленький цветок на запястье, рукав в стиле блэкворк и т.д.):")
+    else:
+        await safe_send_message(message, "Введите услугу (например: прокол хряща, септум, пупок и т.д.):")
+    
     await state.set_state(Booking.service)
 
 @dp.message(Booking.service)
 async def booking_service(message: types.Message, state: FSMContext):
-    await state.update_data(service=message.text)
-    await safe_send_message(message, "Введите желаемую дату (например 20.05):")
+    service = message.text.strip()
+    
+    # Валидация услуги
+    if not service or len(service) < 3:
+        await safe_send_message(message, "❌ Описание услуги слишком короткое. Пожалуйста, опишите подробнее (минимум 3 символа):")
+        return
+    
+    if len(service) > 200:
+        await safe_send_message(message, "❌ Описание слишком длинное. Пожалуйста, опишите кратко (максимум 200 символов):")
+        return
+    
+    await state.update_data(service=service)
+    await safe_send_message(message, "Введите желаемую дату (например: 20.05 или 20 мая):")
     await state.set_state(Booking.date)
 
 @dp.message(Booking.date)
 async def booking_date(message: types.Message, state: FSMContext):
-    await state.update_data(date=message.text)
-    await safe_send_message(message, "Введите желаемое время (например 16:00):")
+    date_text = message.text.strip()
+    
+    # Валидация даты: проверяем формат
+    # Допустимые форматы: 20.05, 20 мая, 20/05, 20-05
+    date_patterns = [
+        r'^\d{1,2}\.\d{1,2}$',  # 20.05
+        r'^\d{1,2}/\d{1,2}$',   # 20/05
+        r'^\d{1,2}-\d{1,2}$',   # 20-05
+        r'^\d{1,2}\s+(января|февраля|марта|апреля|мая|июня|июля|августа|сентября|октября|ноября|декабря)$',  # 20 мая
+    ]
+    
+    valid_format = False
+    for pattern in date_patterns:
+        if re.match(pattern, date_text, re.IGNORECASE):
+            valid_format = True
+            break
+    
+    if not valid_format:
+        await safe_send_message(message, "❌ Неверный формат даты. Пожалуйста, введите дату в формате:\n• 20.05\n• 20 мая\n• 20/05")
+        return
+    
+    # Дополнительная проверка для числового формата
+    if '.' in date_text or '/' in date_text or '-' in date_text:
+        separator = '.' if '.' in date_text else ('/' if '/' in date_text else '-')
+        parts = date_text.split(separator)
+        if len(parts) == 2:
+            day, month = parts
+            if not (1 <= int(day) <= 31 and 1 <= int(month) <= 12):
+                await safe_send_message(message, "❌ Некорректная дата. День должен быть от 1 до 31, месяц от 1 до 12:")
+                return
+    
+    await state.update_data(date=date_text)
+    await safe_send_message(message, "Введите желаемое время (например: 16:00, 14:30):")
     await state.set_state(Booking.time)
 
 @dp.message(Booking.time)
 async def booking_time(message: types.Message, state: FSMContext):
-    await state.update_data(time=message.text)
-
-    payment_text = (
-        "💫 Запись осуществляется по предоплате 500₽ (входит в стоимость процедуры 🩷)\n\n"
-        "По номеру 89179432593 ВТБ банк Вероника Г 💫\n\n"
-        "После оплаты пришлите пожалуйста чек 💌💫\n"
-        "(можно отправить скриншот или фото чека)"
-    )
+    time_text = message.text.strip()
+    
+    # Валидация времени: формат HH:MM или HH.MM
+    time_pattern = r'^([0-1]?[0-9]|2[0-3])[:.]([0-5][0-9])$'
+    
+    if not re.match(time_pattern, time_text):
+        await safe_send_message(message, "❌ Неверный формат времени. Пожалуйста, введите время в формате:\n• 16:00\n• 14:30\n• 09:15")
+        return
+    
+    # Нормализуем формат (заменяем точку на двоеточие)
+    time_text = time_text.replace('.', ':')
+    
+    # Проверяем, что время в рабочих часах (например, с 10:00 до 20:00)
+    hour = int(time_text.split(':')[0])
+    if hour < 9 or hour > 21:
+        await safe_send_message(message, "⚠️ Обратите внимание: вы указали время вне обычных рабочих часов (9:00 - 21:00).\nЕсли это специальная договоренность с мастером - продолжайте.\nИначе, пожалуйста, выберите другое время:")
+        # Не возвращаемся, даем возможность продолжить
+    
+    await state.update_data(time=time_text)
+    
+    data = await state.get_data()
+    service_type = data.get("service_type", "piercing")
+    
+    if service_type == "tattoo":
+        payment_text = (
+            "💫 Запись осуществляется по предоплате 2.000₽ (входит в стоимость процедуры 🩷)\n\n"
+            "По номеру 89179432593 ВТБ банк Вероника Г 💫\n\n"
+            "После оплаты пришлите пожалуйста чек 💌💫\n"
+            "(можно отправить скриншот или фото чека)"
+        )
+    else:
+        payment_text = (
+            "💫 Запись осуществляется по предоплате 500₽ (входит в стоимость процедуры 🩷)\n\n"
+            "По номеру 89179432593 ВТБ банк Вероника Г 💫\n\n"
+            "После оплаты пришлите пожалуйста чек 💌💫\n"
+            "(можно отправить скриншот или фото чека)"
+        )
+    
     await safe_send_message(message, payment_text)
     await state.set_state(Booking.payment_check)
 
 @dp.message(Booking.payment_check)
 async def booking_payment_check(message: types.Message, state: FSMContext):
+    # Проверяем, что пользователь отправил фото или документ
+    if not message.photo and not message.document:
+        await safe_send_message(message, "❌ Пожалуйста, отправьте фото или скриншот чека об оплате.\n\nВы можете:\n• Сделать скриншот\n• Отправить фото чека\n• Отправить документ")
+        return
+    
     data = await state.get_data()
     name = data["name"]
     age = data["age"]
     service = data["service"]
     date = data["date"]
     time = data["time"]
+    service_type = data.get("service_type", "piercing")
     user_id = message.from_user.id
+    username = message.from_user.username or "нет username"
 
     receipt_file_id = None
     if message.photo:
@@ -1236,14 +1373,19 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
         ]
     )
 
+    service_name = "тату" if service_type == "tattoo" else "пирсинг"
+    prepayment = "2000₽" if service_type == "tattoo" else "500₽"
+    
     admin_message = (
-        f"Новая запись (пирсинг, оплачено):\n\n"
-        f"Имя: {name}\n"
-        f"Возраст: {age}\n"
-        f"Услуга: {service}\n"
-        f"Дата: {date}\n"
-        f"Время: {time}\n"
-        f"Статус: Предоплата получена"
+        f"🔔 Новая запись ({service_name}, предоплата {prepayment}):\n\n"
+        f"👤 Имя: {name}\n"
+        f"🎂 Возраст: {age} лет\n"
+        f"💎 Услуга: {service}\n"
+        f"📅 Дата: {date}\n"
+        f"⏰ Время: {time}\n"
+        f"💰 Статус: Предоплата получена\n"
+        f"👤 Username: @{username}\n"
+        f"🆔 User ID: {user_id}"
     )
 
     try:
@@ -1265,7 +1407,7 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
         "➡️ Либо по лестнице на 5 этаж и налево (если охраны нет)\n\n"
         "Нажмите на звоночек🧡, я открою\n"
         "💃 На входе надеваем бахилки/тапочки\n\n"
-        "📅 Ждем вас в указанную дату и время!"
+        f"📅 Ждем вас {date} в {time}!"
     )
 
     try:
@@ -1282,6 +1424,75 @@ async def booking_start_tattoo(message: types.Message, state: FSMContext):
     await state.update_data(service_type="tattoo")
     await safe_send_message(message, "Введите ваше имя:")
     await state.set_state(Booking.name)
+
+# -------------------- Обучение --------------------
+@dp.message(F.text == "📚 Обучение")
+async def training_main(message: types.Message):
+    text = (
+        "Обучение профессии тату-мастера 🖤\n\n"
+        "Когда-то я тоже начинала с нуля 🌸\n"
+        "✨ Без уверенности.\n"
+        "✨ Без понимания, как правильно.\n"
+        "✨ И с огромным количеством вопросов.\n\n"
+        "Сегодня за моими плечами 9 лет опыта, тысячи часов работы, десятки сложных проектов и собственная студия 🖤\n\n"
+        "У вас есть возможность пройти этот путь вместе со мной — красиво и уверенно!\n"
+        "От первых ровных линий\n"
+        "до уверенной работы с клиентами 🖤"
+    )
+    await safe_send_message(message, text, reply_markup=training_main_menu)
+
+@dp.message(F.text == "📚 О программе обучения")
+async def training_program(message: types.Message):
+    text = (
+        "📚 О ПРОГРАММЕ ОБУЧЕНИЯ\n\n"
+        "Полное погружение в мир татуировки и настоящее мастерство ✨ — без поверхностных знаний!\n\n"
+        "❤ ВАЖНЫЙ МОМЕНТ:\n"
+        "Я продаю не азы, а «КАЧЕСТВЕННОЕ ОБУЧЕНИЕ ТЕХНИКАМ», к которым приходила и училась годами 🫵🏽\n\n"
+        "Ты платишь за сжатую систему, которая сэкономит тебе годы проб и всевозможных ошибок.\n\n"
+        "🫵🏽 Под моим обучением ты сможешь делать работы СРАЗУ КАЧЕСТВЕННО, и, соответственно, сразу ставить достойный прайс.\n\n"
+        "⸻⸻⸻\n"
+        "🖤 Как проходит обучение:\n\n"
+        "1. На искусственной коже мы разбираем «ВСЕ» техники и отрабатываем их до идеала (3-5 дней)\n\n"
+        "2. Имитация реального сеанса (по желанию) - это будут мои клиенты, где ты сможешь увидеть весь процесс от и до заранее НА КОЖЕ, задать вопросы и морально подготовиться к своему первому клиенту (это важно)\n\n"
+        "3. Делаем настоящий сеанс с твоими первыми клиентами - моделями!\n"
+        "Я буду рядом на каждом этапе, так что переживать не о чем! 🫶\n\n"
+        "⸻⸻⸻\n"
+        "🫵🏽 Ты получаешь готовый алгоритм действий от первой консультации до финального фото «СИЛЬНОЙ И КРАСИВОЙ РАБОТЫ» ✨\n\n"
+        "А после обучения будешь на все 100% уверен(а) в себе и считаться полноценным МАСТЕРОМ! ❤️\n\n"
+        "💌 Корочка, дальнейшая поддержка, а так же возможность работать у меня в студии предоставляются ✨"
+    )
+    await safe_send_message(message, text)
+
+@dp.message(F.text == "💰 Стоимость и форматы")
+async def training_price(message: types.Message):
+    text = (
+        "💰 СТОИМОСТЬ И ФОРМАТЫ ОБУЧЕНИЯ\n\n"
+        "Так же есть формат «ПРОБНОЕ ОБУЧЕНИЕ» ✨\n"
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="Подробнее о пробном обучении", url="https://t.me/TattooGemSochi/1778")]
+        ]
+    )
+    await safe_send_message(message, text, reply_markup=keyboard)
+
+@dp.message(F.text == "📅 Узнать свободные даты")
+async def training_dates(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Узнать свободные даты обучения", url="https://t.me/Veronikagem")]
+        ]
+    )
+    await safe_send_message(message, "Свяжитесь со мной, чтобы узнать актуальные даты обучения:", reply_markup=keyboard)
+
+@dp.message(F.text == "💌 Задать вопрос по обучению")
+async def training_question(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Задать вопрос мастеру", url="https://t.me/Veronikagem")]
+        ]
+    )
+    await safe_send_message(message, "Если ты мечтаешь стать тату-мастером 🖤 или хочешь вывести свои работы на новый уровень — жду тебя в личных сообщениях 🫶", reply_markup=keyboard)
 
 # -------------------- Админ подтверждение --------------------
 @dp.callback_query(F.data.startswith("done_"))
@@ -1355,7 +1566,11 @@ async def tattoo_main(message: types.Message):
         "История, которая остаётся с вами на всю жизнь ☀️\n"
         "Пусть каждая её линия будет такой же уникальной, как и вы !✍🏽💫"
     )
-    await safe_send_message(message, text, reply_markup=tattoo_main_menu)
+    try:
+        photo = FSInputFile("555.jpg")
+        await safe_send_message(message, text, photo=photo, reply_markup=tattoo_main_menu)
+    except FileNotFoundError:
+        await safe_send_message(message, text, reply_markup=tattoo_main_menu)
 
 @dp.message(F.text == "🔙 Назад в меню тату")
 async def back_to_tattoo_main(message: types.Message):
@@ -1365,74 +1580,297 @@ async def back_to_tattoo_main(message: types.Message):
 async def tattoo_faq(message: types.Message):
     await safe_send_message(message, "Выберите вопрос:", reply_markup=tattoo_faq_menu)
 
-@dp.message(F.text == "📌 Стоимость татуировки")
+@dp.message(F.text == "✨ Стоимость татуировки")
 async def tattoo_price(message: types.Message):
     text = (
-        "📌 Стоимость татуировки зависит от:\n"
-        "• размера и сложности эскиза\n"
-        "• места нанесения\n"
-        "• времени работы мастера\n\n"
-        "Минимальная стоимость сеанса — 3000₽ (1 час).\n"
-        "Более точную цену можно узнать после консультации с мастером."
+        "✨ СТОИМОСТЬ ТАТУИРОВКИ\n\n"
+        "Стоимость работы всегда рассчитывается индивидуально\n"
+        "Она зависит от:\n"
+        "— зоны и размера\n"
+        "— сложности и детализации (времени)\n"
+        "— количества сеансов\n"
+        "— используемых материалов (количество цветов и одноразовых игл) ✍🏽\n\n"
+        "Вы можете прислать референсы / эскиз / описание\n"
+        "чтобы я сориентировала вас по цене 🫶🏽\n"
+        "Каждый проект — это отдельная история 🖤\n\n"
+        "*Поэтому более точную стоимость я смогу назвать после обсуждения вашей идеи 💬\n\n"
+        "⸻⸻⸻\n"
+        "💎 ВАЖНО\n"
+        "Эскиз создаётся и дорабатывается под вас - не просто «картинка», а работа, которая идеально сядет по форме и анатомии ✨\n\n"
+        "⸻⸻⸻\n"
+        "💰 СРЕДНИЙ ЧЕК\n"
+        "— минимальная стоимость сеанса 5.000₽ (даже на точку)\n\n"
+        "Масштабные проекты:\n"
+        "— Ч/б сеанс: 25.000₽\n"
+        "— Цветной сеанс: 30.000₽\n"
+        "— Модельные проекты: 15.000₽ за сеанс\n"
+        "Количество сеансов зависит от масштаба и сложности работы\n\n"
+        "⸻⸻⸻\n"
+        "📍 ОРИЕНТИР ПО СЕАНСАМ\n"
+        "— Рукав (внешняя часть): 3-4 сеанса\n"
+        "— Рукав вкруг: 5–8 сеансов (стандарт / более детальные)\n"
+        "— Нога полностью: 8–12 сеансов\n"
+        "— Спина: 6–15 сеансов\n"
+        "— Плечо: 1–2 сеанса\n"
+        "— Предплечье: 1 сеанс\n"
+        "— Икра: 1–2 сеанса\n"
+        "— Бедро: 3–5 сеансов\n\n"
+        "⸻⸻⸻\n"
+        "💫 Я не работаю «по шаблону»\n"
+        "и не делаю просто тату — мы создаём работу, которая будет с вами на всю жизнь 🖤"
     )
-    await safe_send_message(message, text)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Обсудить работу с мастером", url="https://t.me/Veronikagem")]
+        ]
+    )
+    await safe_send_message(message, text, reply_markup=keyboard)
+    
+    # Отправляем фотографии
+    try:
+        media = []
+        for path in ["155.jpg", "255.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(path)))
+            except FileNotFoundError:
+                continue
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото стоимости: {e}")
 
 @dp.message(F.text == "💔 Больно ли делать тату")
 async def tattoo_pain(message: types.Message):
     text = (
         "💔 Больно ли делать тату?\n\n"
-        "Болевые ощущения зависят от места нанесения и вашего болевого порога.\n"
-        "Самые чувствительные зоны: рёбра, стопы, внутренняя поверхность рук.\n"
-        "Менее болезненные: плечи, предплечья, бёдра.\n\n"
-        "Современные мастера используют анестезирующие средства, которые значительно снижают дискомфорт.\n"
-        "В любом случае, это терпимо, и результат того стоит!"
+        "Ко мне часто приходят новенькие и очень переживают 🖤\n"
+        "Потому что где-то что-то слышали и накрутили себя 💔\n\n"
+        "Но в большинстве случаев всё заканчивается одинаково:\n"
+        "я беру машинку, провожу первые линии —\n"
+        "и человек с облегчением выдыхает 💛\n\n"
+        "⸻⸻⸻\n"
+        "💬 Что по ощущениям?\n"
+        "Это не та боль, которую обычно представляют!\n"
+        "Скорее — терпимое, контролируемое ощущение\n"
+        "к которому довольно быстро привыкаешь ☺️\n\n"
+        "⸻⸻⸻\n"
+        "✨ Где может быть ощутимее:\n"
+        "— рёбра\n"
+        "— кисти (самое ощутимое)\n"
+        "— стопы\n"
+        "— внутренний сгиб руки\n"
+        "— зоны близко к кости и сухожилиям\n\n"
+        "Но даже там — это не «невыносимо», а просто более чувствительно 🖤\n\n"
+        "⸻⸻⸻\n"
+        "💊 Обезболивание\n"
+        "Я не рекомендую использовать обезболивающие,\n"
+        "особенно в начале сеанса.\n"
+        "Важно, чтобы кожа правильно реагировала, и процесс проходил чисто и предсказуемо 🫰🏽\n\n"
+        "⸻⸻⸻\n"
+        "💡 Если это большой сеанс,\n"
+        "и вы уже устали или стало слишком неприятно — да, я могу аккуратно обезболить конкретный участок, чтобы спокойно завершить работу ❤️‍🩹\n\n"
+        "⸻⸻⸻\n"
+        "✨ Самое главное —\n"
+        "не накручивать себя заранее! Всё проходит гораздо легче,\n"
+        "чем вы ожидаете 🖤"
     )
     await safe_send_message(message, text)
+    
+    # Отправляем фотографии
+    try:
+        media = []
+        for path in ["888.jpg", "999.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(path)))
+            except FileNotFoundError:
+                continue
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото боли: {e}")
 
 @dp.message(F.text == "✍🏽 Про создание эскиза")
 async def tattoo_design(message: types.Message):
     text = (
-        "✍🏽 Создание эскиза\n\n"
-        "Эскиз разрабатывается индивидуально с учётом ваших пожеланий и анатомии.\n"
-        "Вы можете принести свои идеи, референсы, или довериться мастеру.\n"
-        "Эскиз утверждается до начала сеанса, и вы можете вносить правки."
+        "✨ СОЗДАНИЕ ЭСКИЗА\n\n"
+        "Я делаю татуировки не на поток и не «по шаблону». Для меня каждая работа — это особый процесс, диалог и совместное создание 🖤\n\n"
+        "⸻⸻⸻\n"
+        "💬 Как проходит процесс\n"
+        "Мне важно чувствовать вас, понимать ваш вайб\n"
+        "и видеть реакцию здесь и сейчас\n"
+        "Только так можно сделать эскиз, который откликнется на все 1000% ✨\n\n"
+        "Мы вместе перебираем варианты, обсуждаем и выстраиваем форму.\n"
+        "Я учитываю размер и анатомию, чтобы всё идеально легло на ваше тело ✨\n"
+        "И как только попадаем в «то самое» — сразу начинаем 🖤\n\n"
+        "⸻⸻⸻\n"
+        "🪭 Мои татуировки — для тех, кто ценит:\n"
+        "— индивидуальный подход\n"
+        "— осознанный выбор\n"
+        "— аккуратную и вдумчивую работу\n"
+        "— процесс не меньше, чем результат\n\n"
+        "⸻⸻⸻\n"
+        "📩 Чтобы узнать стоимость и записаться:\n"
+        "Отправьте мне:\n"
+        "1. Примерный референс / идею\n"
+        "2. Место нанесения\n"
+        "3. Примерный размер\n"
+        "4. Фото зоны (по желанию — для точной оценки масштаба)\n"
+        "5. Бюджет (если речь о большой работе)\n\n"
+        "Это позволяет мне сразу предложить оптимальное решение под ваш запрос 💡\n\n"
+        "⸻⸻⸻\n"
+        "💰 Консультации\n"
+        "— Онлайн — бесплатно\n"
+        "— В студии — 2000₽\n"
+        "(при записи в день консультации сумма входит в стоимость татуировки)\n\n"
+        "⸻⸻⸻\n"
+        "🖤 Я работаю с теми, кто понимает ценность процесса\n"
+        "и хочет получить действительно свою работу 🫰🏽"
     )
-    await safe_send_message(message, text)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Обсудить работу с мастером", url="https://t.me/Veronikagem")]
+        ]
+    )
+    await safe_send_message(message, text, reply_markup=keyboard)
 
 @dp.message(F.text == "🩶 Мифы о татуировках")
 async def tattoo_myths(message: types.Message):
     text = (
-        "🩶 Мифы о татуировках\n\n"
-        "❌ Татуировки болят невыносимо — всё индивидуально, современные средства помогают.\n"
-        "❌ Татуировки выцветают через пару лет — при правильном уходе они остаются яркими долго.\n"
-        "❌ Нельзя делать тату, если есть родинки — можно, но мастер обойдёт их.\n"
-        "❌ Татуировки опасны заражением — при работе в стерильных условиях риск минимален."
+        "🩶 МИФЫ О ТАТУИРОВКАХ\n\n"
+        "С тату до сих пор связано много странных мифов\n"
+        "которые давно не имеют ничего общего с реальностью! 😏\n\n"
+        "💬 МИФ 1: «Тату — это очень больно»\n"
+        "— Нет\n"
+        "На деле — терпимо, в большинстве зон это просто неприятные ощущения\n\n"
+        "💬 МИФ 2: «Летом делать нельзя»\n"
+        "— Можно\n"
+        "при соблюдении ухода — без проблем\n\n"
+        "💬 МИФ 3: «Тату нужно постоянно обновлять»\n"
+        "— Нет\n"
+        "«качественная» работа сохраняет свой вид годами\n\n"
+        "💬 МИФ 4: «Чем дешевле — тем лучше»\n"
+        "— Нет\n"
+        "В тату это чаще всего работает наоборот\n"
+        "Перекрытия, исправления и удаление лазером стоят намного дороже, чем сразу сделать хорошо\n\n"
+        "💬 МИФ 5: «Эскиз можно просто взять из интернета»\n"
+        "— Можно\n"
+        "Но результат будет соответствующий\n"
+        "Татуировка — это про индивидуальность,\n"
+        "а не копию чужой работы\n\n"
+        "💬 МИФ 6: «Все мастера делают одинаково»\n"
+        "— Нет\n"
+        "У каждого свой уровень, техника и видение\n"
+        "И именно это определяет результат\n\n"
+        "💬 МИФ 7: «Перед тату нельзя пить кофе»\n"
+        "— Можно\n"
+        "В небольших количествах и если у вас нормальное самочувствие\n\n"
+        "💬 МИФ 8: «Алкоголь перед сеансом поможет расслабиться»\n"
+        "— Нет\n"
+        "он ухудшает процесс и замедляет заживление\n\n"
+        "💬 МИФ 9: «Тату со временем обязательно «поплывёт»»\n"
+        "— Нет\n"
+        "при правильной технике и уходе работа остаётся читаемой\n\n"
+        "💬 МИФ 10: «Белые татуировки выглядят как на фото всегда»\n"
+        "— Нет\n"
+        "они заживают иначе и часто становятся менее заметными\n\n"
+        "💬 МИФ 11: «Маленькая тату = быстро и просто»\n"
+        "— Нет\n"
+        "иногда миниатюры требуют даже большей точности и концентрации\n\n"
+        "💬 МИФ 12: «Обезбол — это всегда хорошо»\n"
+        "— Нет\n"
+        "в начале сеанса он может только ухудшить работу\n\n"
+        "💬 МИФ 13: «Если есть идея — её можно сразу набить без адаптации»\n"
+        "— Нет\n"
+        "эскиз всегда подстраивается под тело\n\n"
+        "💬 МИФ 14: «Если тату не понравилась — это легко исправить»\n"
+        "— Не всегда\n"
+        "перекрытия и исправления — это сложная работа\n\n"
+        "💎 Татуировка — это не про мифы, а про осознанный выбор\n"
+        "И если вы делаете его правильно — результат будет радовать вас годами 🖤"
     )
     await safe_send_message(message, text)
+    
+    # Отправляем фотографии
+    try:
+        media = []
+        for path in ["123.jpg", "345.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(path)))
+            except FileNotFoundError:
+                continue
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото мифов: {e}")
 
 @dp.message(F.text == "☀️ Тату летом")
 async def tattoo_summer(message: types.Message):
     text = (
-        "☀️ Тату летом\n\n"
-        "Делать тату летом можно, но нужно быть осторожнее:\n"
-        "• избегать солнца на свежей татуировке (носить закрытую одежду или использовать SPF 50+ после заживления)\n"
-        "• не посещать бассейны, сауны, пляжи до полного заживления\n"
-        "• следить за гигиеной, чтобы избежать инфекций"
+        "☀️ ТАТУ ЛЕТОМ\n\n"
+        "Можно ли делать тату летом?\n"
+        "— Да, конечно 😎\n"
+        "Ничего «страшного» в этом нет. Люди делают татуировки круглый год 🖤\n\n"
+        "⸻⸻⸻\n"
+        "💬 Важно понимать одно:\n"
+        "лето — это не запрет,\n"
+        "а просто чуть больше внимания к заживлению\n\n"
+        "⸻⸻⸻\n"
+        "📌 Основные моменты:\n"
+        "— избегать активного солнца\n"
+        "— не загорать в зоне тату\n"
+        "— не купаться в море / бассейне в период заживления\n"
+        "— соблюдать уход\n\n"
+        "⸻⸻⸻\n"
+        "🌴 По сути, правила те же самые, что и в любое другое время года.\n"
+        "Просто летом добавляется солнце ☀️ , и чуть больше соблазнов нарушить рекомендации 😏\n\n"
+        "⸻⸻⸻\n"
+        "💎 Если вы готовы соблюдать уход — лето никак не мешает сделать татуировку 🖤"
     )
     await safe_send_message(message, text)
 
-@dp.message(F.text == "✍🏽 Коррекции")
+@dp.message(F.text == "❗️ Коррекции")
 async def tattoo_correction(message: types.Message):
     text = (
-        "✍🏽 Коррекция татуировки\n\n"
-        "Коррекция может потребоваться, если:\n"
-        "• краска легла неравномерно\n"
-        "• появились светлые участки после заживления\n"
-        "• вы хотите изменить детали\n\n"
-        "Коррекция обычно делается через 1-3 месяца после первичного сеанса.\n"
-        "Стоимость зависит от объёма работы."
+        "❗️ КОРРЕКЦИИ\n\n"
+        "📌 Когда они действительно нужны?\n"
+        "Я изначально работаю так,\n"
+        "чтобы вам не приходилось возвращаться на коррекции 🫰🏽\n"
+        "Плотно, чисто и точно —\n"
+        "с учётом заживления и поведения кожи 🖤\n\n"
+        "⸻⸻⸻\n"
+        "💬 В каких случаях коррекция может понадобиться:\n"
+        "— ваше личное желание что-то доработать или изменить спустя время\n"
+        "— несоблюдение рекомендаций по уходу\n"
+        "— работа с обезболиванием на больших проектах (это физиология)\n"
+        "— сложные зоны: шея, пальцы, кисти, стопы\n"
+        "(в редких случаях — спина)\n\n"
+        "⸻⸻⸻\n"
+        "💗 Даже на капризных зонах можно добиться идеального результата с первого раза\n"
+        "Но важно понимать: кожа — живая, и она у всех ведёт себя по-разному\n\n"
+        "⸻⸻⸻\n"
+        "💰 Стоимость коррекций\n"
+        "— коррекции оплачиваются отдельно\n"
+        "(от 5.000₽ — минимальная стоимость работы)\n"
+        "— бесплатно выполняются\n"
+        "при повторном визите на новую татуировку ✨\n\n"
+        "⸻⸻⸻\n"
+        "💎 Я не закладываю «обязательные коррекции» в свою работу и не растягиваю процесс искусственно.\n"
+        "Вы сразу получаете максимально качественный результат! 🖤"
     )
     await safe_send_message(message, text)
+    
+    # Отправляем фотографии
+    try:
+        media = []
+        for path in ["666.jpg", "777.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(path)))
+            except FileNotFoundError:
+                continue
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото коррекций: {e}")
 
 @dp.message(F.text == "📌 Памятки (тату)")
 async def tattoo_memos(message: types.Message):
@@ -1494,6 +1932,16 @@ async def tattoo_no_care(message: types.Message):
         "Пожалуйста, ухаживайте за татуировкой правильно — это залог её красоты и вашего здоровья!"
     )
     await safe_send_message(message, text)
+
+# -------------------- Про пигменты --------------------
+@dp.message(F.text == "🎨 Про пигменты")
+async def tattoo_pigments(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎨 Подробнее о пигментах", url="https://t.me/TattooGemSochi/1918")]
+        ]
+    )
+    await safe_send_message(message, "Узнайте больше о пигментах, которые я использую:", reply_markup=keyboard)
 
 # -------------------- Связаться с мастером --------------------
 @dp.message(F.text == "📞 Связаться с мастером")
