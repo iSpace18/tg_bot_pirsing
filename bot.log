@@ -48,3 +48,88 @@ client_session: <aiohttp.client.ClientSession object at 0x0000024474B776E0>
 2026-04-28 12:53:00,895 - aiogram.event - INFO - Update id=426893739 is handled. Duration 265 ms by bot id=8480963257
 2026-04-28 12:53:05,426 - aiogram.event - INFO - Update id=426893740 is handled. Duration 328 ms by bot id=8480963257
 2026-04-28 12:53:09,918 - aiogram.event - INFO - Update id=426893741 is handled. Duration 1891 ms by bot id=8480963257
+2026-04-28 22:33:38,009 - __main__ - INFO - ==================================================
+2026-04-28 22:33:38,072 - __main__ - INFO - ADMIN_ID = 1658346274
+2026-04-28 22:33:38,072 - __main__ - INFO - ==================================================
+2026-04-28 22:33:39,848 - apscheduler.scheduler - INFO - Scheduler started
+2026-04-28 22:33:39,848 - aiogram.dispatcher - INFO - Start polling
+2026-04-28 22:33:39,972 - aiogram.dispatcher - INFO - Run polling for bot @TatuPirsingSochi_bot id=8480963257 - 'TatuPirsingSochi'
+2026-04-28 22:55:32,639 - aiogram.event - INFO - Update id=426893742 is handled. Duration 998 ms by bot id=8480963257
+2026-04-28 22:55:39,972 - aiogram.event - INFO - Update id=426893743 is handled. Duration 731 ms by bot id=8480963257
+2026-04-28 22:55:50,899 - aiogram.event - INFO - Update id=426893744 is handled. Duration 149 ms by bot id=8480963257
+2026-04-28 22:55:54,279 - aiogram.event - INFO - Update id=426893745 is handled. Duration 177 ms by bot id=8480963257
+2026-04-28 22:58:09,099 - aiogram.event - INFO - Update id=426893746 is handled. Duration 617 ms by bot id=8480963257
+2026-04-28 22:58:53,924 - aiogram.event - INFO - Update id=426893747 is handled. Duration 131 ms by bot id=8480963257
+2026-04-28 22:59:00,349 - aiogram.event - INFO - Update id=426893748 is handled. Duration 198 ms by bot id=8480963257
+2026-04-28 22:59:03,823 - aiogram.event - INFO - Update id=426893749 is handled. Duration 567 ms by bot id=8480963257
+2026-04-28 22:59:26,163 - aiogram.event - INFO - Update id=426893750 is handled. Duration 263 ms by bot id=8480963257
+2026-04-28 22:59:30,373 - aiogram.event - INFO - Update id=426893751 is handled. Duration 1176 ms by bot id=8480963257
+2026-04-28 22:59:42,762 - aiogram.event - INFO - Update id=426893752 is handled. Duration 136 ms by bot id=8480963257
+2026-04-28 22:59:50,968 - aiogram.event - INFO - Update id=426893753 is handled. Duration 3350 ms by bot id=8480963257
+2026-04-28 22:59:56,727 - aiogram.event - INFO - Update id=426893754 is handled. Duration 130 ms by bot id=8480963257
+2026-04-28 23:00:01,717 - aiogram.event - INFO - Update id=426893755 is handled. Duration 175 ms by bot id=8480963257
+2026-04-28 23:00:06,718 - aiogram.event - INFO - Update id=426893756 is handled. Duration 125 ms by bot id=8480963257
+2026-04-28 23:00:09,014 - aiogram.event - INFO - Update id=426893757 is handled. Duration 167 ms by bot id=8480963257
+2026-04-28 23:00:22,077 - aiogram.event - INFO - Update id=426893758 is handled. Duration 169 ms by bot id=8480963257
+2026-04-28 23:00:28,970 - aiogram.event - INFO - Update id=426893759 is handled. Duration 394 ms by bot id=8480963257
+2026-04-28 23:00:37,289 - aiogram.event - INFO - Update id=426893760 is handled. Duration 175 ms by bot id=8480963257
+2026-04-28 23:00:44,005 - aiogram.event - INFO - Update id=426893761 is handled. Duration 133 ms by bot id=8480963257
+2026-04-28 23:00:48,021 - aiogram.event - INFO - Update id=426893762 is handled. Duration 173 ms by bot id=8480963257
+2026-04-28 23:00:50,428 - aiogram.event - INFO - Update id=426893763 is handled. Duration 588 ms by bot id=8480963257
+2026-04-28 23:00:52,915 - aiogram.event - INFO - Update id=426893764 is handled. Duration 226 ms by bot id=8480963257
+2026-04-28 23:00:57,776 - aiogram.event - INFO - Update id=426893765 is handled. Duration 128 ms by bot id=8480963257
+2026-04-28 23:01:02,460 - aiogram.event - INFO - Update id=426893766 is handled. Duration 1125 ms by bot id=8480963257
+2026-04-28 23:03:12,093 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientOSError: [WinError 1236] Подключение к сети было разорвано локальной системой
+2026-04-28 23:03:12,098 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8480963257)
+2026-04-28 23:03:34,166 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramNetworkError: HTTP Client says - ClientConnectorError: Cannot connect to host api.telegram.org:443 ssl:default [Превышен таймаут семафора]
+2026-04-28 23:03:34,166 - aiogram.dispatcher - WARNING - Sleep for 1.227822 seconds and try again... (tryings = 1, bot id = 8480963257)
+2026-04-28 23:03:45,847 - aiogram.dispatcher - INFO - Connection established (tryings = 2, bot id = 8480963257)
+2026-04-28 23:10:57,754 - aiogram.event - INFO - Update id=426893767 is handled. Duration 5011 ms by bot id=8480963257
+2026-04-28 23:11:00,495 - aiogram.event - INFO - Update id=426893768 is handled. Duration 145 ms by bot id=8480963257
+2026-04-28 23:11:02,775 - aiogram.event - INFO - Update id=426893769 is handled. Duration 168 ms by bot id=8480963257
+2026-04-28 23:11:05,827 - aiogram.event - INFO - Update id=426893770 is handled. Duration 123 ms by bot id=8480963257
+2026-04-28 23:11:08,038 - aiogram.event - INFO - Update id=426893771 is handled. Duration 177 ms by bot id=8480963257
+2026-04-28 23:11:12,410 - aiogram.event - INFO - Update id=426893772 is handled. Duration 115 ms by bot id=8480963257
+2026-04-28 23:11:21,196 - aiogram.event - INFO - Update id=426893773 is handled. Duration 167 ms by bot id=8480963257
+2026-04-28 23:11:24,172 - aiogram.event - INFO - Update id=426893774 is handled. Duration 130 ms by bot id=8480963257
+2026-04-28 23:11:28,184 - aiogram.event - INFO - Update id=426893775 is handled. Duration 161 ms by bot id=8480963257
+2026-04-28 23:11:34,233 - aiogram.event - INFO - Update id=426893776 is handled. Duration 737 ms by bot id=8480963257
+2026-04-28 23:11:50,853 - aiogram.dispatcher - INFO - Polling stopped
+2026-04-28 23:11:50,854 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+2026-04-28 23:11:50,854 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8480963257)
+2026-04-28 23:11:51,110 - aiogram.dispatcher - INFO - Polling stopped for bot @TatuPirsingSochi_bot id=8480963257 - 'TatuPirsingSochi'
+2026-04-28 23:11:55,955 - __main__ - INFO - ==================================================
+2026-04-28 23:11:55,959 - __main__ - INFO - ADMIN_ID = 1658346274
+2026-04-28 23:11:55,960 - __main__ - INFO - ==================================================
+2026-04-28 23:12:01,671 - apscheduler.scheduler - INFO - Scheduler started
+2026-04-28 23:12:01,671 - aiogram.dispatcher - INFO - Start polling
+2026-04-28 23:12:01,779 - aiogram.dispatcher - INFO - Run polling for bot @TatuPirsingSochi_bot id=8480963257 - 'TatuPirsingSochi'
+2026-04-28 23:12:05,686 - aiogram.event - INFO - Update id=426893777 is handled. Duration 1284 ms by bot id=8480963257
+2026-04-28 23:12:09,697 - aiogram.event - INFO - Update id=426893778 is handled. Duration 135 ms by bot id=8480963257
+2026-04-28 23:12:10,798 - aiogram.event - INFO - Update id=426893779 is handled. Duration 172 ms by bot id=8480963257
+2026-04-28 23:12:13,618 - aiogram.event - INFO - Update id=426893780 is handled. Duration 147 ms by bot id=8480963257
+2026-04-28 23:12:20,093 - aiogram.event - INFO - Update id=426893781 is handled. Duration 175 ms by bot id=8480963257
+2026-04-28 23:12:23,604 - aiogram.event - INFO - Update id=426893782 is handled. Duration 145 ms by bot id=8480963257
+2026-04-28 23:12:27,988 - aiogram.event - INFO - Update id=426893783 is handled. Duration 167 ms by bot id=8480963257
+2026-04-28 23:12:34,560 - aiogram.event - INFO - Update id=426893784 is handled. Duration 1058 ms by bot id=8480963257
+2026-04-28 23:13:07,856 - aiogram.event - INFO - Update id=426893785 is handled. Duration 142 ms by bot id=8480963257
+2026-04-28 23:13:09,778 - aiogram.event - INFO - Update id=426893786 is handled. Duration 154 ms by bot id=8480963257
+2026-04-28 23:13:33,576 - aiogram.event - INFO - Update id=426893787 is handled. Duration 127 ms by bot id=8480963257
+2026-04-28 23:13:42,114 - aiogram.event - INFO - Update id=426893788 is handled. Duration 165 ms by bot id=8480963257
+2026-04-28 23:13:55,271 - aiogram.event - INFO - Update id=426893789 is handled. Duration 166 ms by bot id=8480963257
+2026-04-28 23:13:57,441 - aiogram.event - INFO - Update id=426893790 is handled. Duration 120 ms by bot id=8480963257
+2026-04-28 23:13:59,182 - aiogram.event - INFO - Update id=426893791 is handled. Duration 154 ms by bot id=8480963257
+2026-04-28 23:14:01,677 - aiogram.event - INFO - Update id=426893792 is handled. Duration 115 ms by bot id=8480963257
+2026-04-28 23:14:03,283 - aiogram.event - INFO - Update id=426893793 is handled. Duration 547 ms by bot id=8480963257
+2026-04-28 23:14:10,510 - aiogram.event - INFO - Update id=426893794 is handled. Duration 147 ms by bot id=8480963257
+2026-04-28 23:14:12,849 - aiogram.event - INFO - Update id=426893795 is handled. Duration 311 ms by bot id=8480963257
+2026-04-28 23:14:30,690 - aiogram.event - INFO - Update id=426893796 is handled. Duration 175 ms by bot id=8480963257
+2026-04-28 23:14:34,520 - aiogram.event - INFO - Update id=426893797 is handled. Duration 533 ms by bot id=8480963257
+2026-04-28 23:14:57,919 - aiogram.event - INFO - Update id=426893798 is handled. Duration 242 ms by bot id=8480963257
+2026-04-28 23:14:59,798 - aiogram.event - INFO - Update id=426893799 is handled. Duration 141 ms by bot id=8480963257
+2026-04-28 23:15:02,927 - aiogram.event - INFO - Update id=426893800 is handled. Duration 158 ms by bot id=8480963257
+2026-04-28 23:15:05,717 - aiogram.event - INFO - Update id=426893801 is handled. Duration 432 ms by bot id=8480963257
+2026-04-28 23:34:57,634 - aiogram.dispatcher - INFO - Polling stopped
+2026-04-28 23:34:57,635 - aiogram.dispatcher - ERROR - Failed to fetch updates - TelegramNetworkError: HTTP Client says - ServerDisconnectedError: Server disconnected
+2026-04-28 23:34:57,636 - aiogram.dispatcher - WARNING - Sleep for 1.000000 seconds and try again... (tryings = 0, bot id = 8480963257)
+2026-04-28 23:34:57,890 - aiogram.dispatcher - INFO - Polling stopped for bot @TatuPirsingSochi_bot id=8480963257 - 'TatuPirsingSochi'

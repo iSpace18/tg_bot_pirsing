@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 import logging
 import sys
 import re
+import sqlite3
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (
@@ -39,6 +40,91 @@ session = AiohttpSession(timeout=120)
 bot = Bot(token=TOKEN, session=session)
 dp = Dispatcher(storage=MemoryStorage())
 scheduler = AsyncIOScheduler()
+
+# -------------------- Функции для работы с БД --------------------
+def get_db_connection():
+    """Создает подключение к базе данных"""
+    conn = sqlite3.connect('database.db')
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def save_booking(user_id, name, age, service, date, time, service_type, receipt_file_id=None):
+    """Сохраняет запись в базу данных"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        INSERT INTO bookings 
+        (user_id, name, age, service, date, time, service_type, status, payment_status, receipt_file_id, visit_date)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ''', (user_id, name, age, service, date, time, service_type, 'pending', 'paid', receipt_file_id, None))
+    
+    booking_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    return booking_id
+
+def update_booking_status(user_id, status):
+    """Обновляет статус записи"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE bookings 
+        SET status = ?, visit_date = ?
+        WHERE user_id = ? AND status = 'pending'
+        ORDER BY id DESC LIMIT 1
+    ''', (status, datetime.now().strftime('%Y-%m-%d %H:%M:%S'), user_id))
+    
+    conn.commit()
+    conn.close()
+
+def get_booking_by_user(user_id):
+    """Получает последнюю запись пользователя"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        SELECT * FROM bookings 
+        WHERE user_id = ? 
+        ORDER BY id DESC LIMIT 1
+    ''', (user_id,))
+    
+    booking = cursor.fetchone()
+    conn.close()
+    
+    return booking
+
+def set_needs_replacement(user_id, needs):
+    """Устанавливает флаг необходимости замены ножки"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE bookings 
+        SET needs_replacement = ?
+        WHERE user_id = ? AND status = 'completed'
+        ORDER BY id DESC LIMIT 1
+    ''', (1 if needs else 0, user_id))
+    
+    conn.commit()
+    conn.close()
+
+def mark_client_confirmed(user_id):
+    """Отмечает, что клиент подтвердил визит"""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute('''
+        UPDATE bookings 
+        SET confirmed_by_client = 1
+        WHERE user_id = ? AND status = 'completed'
+        ORDER BY id DESC LIMIT 1
+    ''', (user_id,))
+    
+    conn.commit()
+    conn.close()
 
 # -------------------- FSM состояния --------------------
 class Booking(StatesGroup):
@@ -134,6 +220,7 @@ sos_menu = ReplyKeyboardMarkup(
 tattoo_main_menu = ReplyKeyboardMarkup(
     keyboard=[
         [KeyboardButton(text="❓ Популярные вопросы (тату)")],
+        [KeyboardButton(text="📅 Свободные окошки (тату)")],
         [KeyboardButton(text="💌 Записаться на сеанс тату")],
         [KeyboardButton(text="💌 Прислать фото мастеру")],
         [KeyboardButton(text="📍 Адрес студии")],
@@ -290,7 +377,7 @@ async def slots(message: types.Message):
         inline_keyboard=[
             [InlineKeyboardButton(
                 text="Посмотреть календарь",
-                url="https://t.me/GemShopSochi/1644"
+                url="https://t.me/GemShopSochi/1772"
             )]
         ]
     )
@@ -1395,6 +1482,30 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
             await bot.send_document(ADMIN_ID, receipt_file_id, caption=admin_message, reply_markup=keyboard)
         else:
             await bot.send_message(ADMIN_ID, admin_message, reply_markup=keyboard)
+        
+        # Сохраняем запись в базу данных
+        booking_id = save_booking(user_id, name, age, service, date, time, service_type, receipt_file_id)
+        logger.info(f"Запись сохранена в БД с ID: {booking_id}")
+        
+        # Планируем напоминание за 1 день до визита
+        try:
+            visit_datetime = datetime.strptime(f"{date} {time}", "%d.%m.%Y %H:%M")
+            reminder_datetime = visit_datetime - timedelta(days=1)
+            
+            # Отправляем напоминание вечером (в 19:00) за день до визита
+            reminder_datetime = reminder_datetime.replace(hour=19, minute=0, second=0)
+            
+            if reminder_datetime > datetime.now():
+                scheduler.add_job(
+                    send_visit_reminder,
+                    "date",
+                    run_date=reminder_datetime,
+                    args=[user_id, date, time, service_type]
+                )
+                logger.info(f"Запланировано напоминание о визите на {reminder_datetime}")
+        except Exception as e:
+            logger.error(f"Ошибка при планировании напоминания о визите: {e}")
+        
     except Exception as e:
         logger.error(f"Ошибка при отправке уведомления админу: {e}")
 
@@ -1411,10 +1522,21 @@ async def booking_payment_check(message: types.Message, state: FSMContext):
     )
 
     try:
-        photo = FSInputFile("studio_address.jpg")
-        await safe_send_message(message, address_text, photo=photo)
-    except FileNotFoundError:
+        # Отправляем текст
         await safe_send_message(message, address_text)
+        
+        # Отправляем фотографии входа
+        media = []
+        for photo_name in ["studio_address.jpg", "vhod_2.jpg", "vhod_3.jpg", "vhod_4.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(photo_name)))
+            except FileNotFoundError:
+                logger.warning(f"Фото {photo_name} не найдено")
+        
+        if media:
+            await safe_send_media_group(message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке фото входа: {e}")
 
     await state.clear()
 
@@ -1498,39 +1620,35 @@ async def training_question(message: types.Message):
 @dp.callback_query(F.data.startswith("done_"))
 async def booking_done(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
-
-    await safe_send_message(
-        user_id,
-        "Спасибо за визит в нашу студию! 💖\n\n"
-        "Если будет время и настроение, буду рада вашей обратной связи 😍 о проделанной работе 🫧/ об атмосфере студии ✨ или "
-        "ваших личных впечатлениях! 🫂\n"
-        "О плановой замене ножки Вам придет напоминание через две недели !🫧\n"
-        "Ваш мастер Veronika Gem 🫶🏽",
-        reply_markup=get_review_keyboard()
-    )
-
+    
+    # Обновляем статус записи в БД
+    update_booking_status(user_id, 'completed')
+    
+    # Получаем информацию о записи
+    booking = get_booking_by_user(user_id)
+    
+    if not booking:
+        await callback.answer("❌ Запись не найдена")
+        return
+    
+    service_type = booking['service_type'] if booking['service_type'] else 'piercing'
+    
+    # Отправляем запрос на подтверждение клиенту через 1 час
     scheduler.add_job(
-        send_review_reminder,
+        send_confirmation_request,
         "date",
-        run_date=datetime.now() + timedelta(days=2),
-        args=[user_id]
+        run_date=datetime.now() + timedelta(hours=1),
+        args=[user_id, service_type]
     )
-
-    scheduler.add_job(
-        send_replacement_reminder,
-        "date",
-        run_date=datetime.now() + timedelta(days=14),
-        args=[user_id]
+    
+    await callback.answer("✅ Клиент отмечен. Через 1 час ему придёт запрос на подтверждение визита")
+    
+    # Отправляем мастеру подтверждение
+    await bot.send_message(
+        ADMIN_ID,
+        f"✅ Запись подтверждена для пользователя {user_id}\n"
+        f"Через 1 час клиенту придёт запрос на подтверждение визита"
     )
-
-    scheduler.add_job(
-        send_tattoo_3months_reminder,
-        "date",
-        run_date=datetime.now() + timedelta(days=90),
-        args=[user_id]
-    )
-
-    await callback.answer("✅ Клиент отмечен, напоминания запланированы")
 
 def get_review_keyboard():
     return InlineKeyboardMarkup(
@@ -1579,6 +1697,18 @@ async def back_to_tattoo_main(message: types.Message):
 @dp.message(F.text == "❓ Популярные вопросы (тату)")
 async def tattoo_faq(message: types.Message):
     await safe_send_message(message, "Выберите вопрос:", reply_markup=tattoo_faq_menu)
+
+@dp.message(F.text == "📅 Свободные окошки (тату)")
+async def tattoo_slots(message: types.Message):
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(
+                text="Посмотреть календарь",
+                url="https://t.me/TattooGemSochi/2032"
+            )]
+        ]
+    )
+    await safe_send_message(message, "Свободные даты для тату:", reply_markup=keyboard)
 
 @dp.message(F.text == "✨ Стоимость татуировки")
 async def tattoo_price(message: types.Message):
@@ -1878,21 +2008,11 @@ async def tattoo_memos(message: types.Message):
 
 @dp.message(F.text == "🖤 Подготовка к сеансу тату")
 async def tattoo_prep(message: types.Message):
-    text = (
-        "🖤 Подготовка к сеансу тату\n\n"
-        "✅ За день до:\n"
-        "• не употреблять алкоголь\n"
-        "• не принимать кроворазжижающие препараты\n"
-        "• выспаться\n\n"
-        "✅ За 2-3 часа:\n"
-        "• плотно поесть\n"
-        "• пить воду\n\n"
-        "✅ Непосредственно:\n"
-        "• принять душ\n"
-        "• нанести увлажняющий крем на место будущей тату (за час)\n"
-        "• надеть удобную одежду, открывающую доступ к зоне"
-    )
-    await safe_send_message(message, text)
+    try:
+        photo = FSInputFile("tattoo_prep.jpg")
+        await safe_send_message(message, "🖤 Подготовка к сеансу тату", photo=photo)
+    except FileNotFoundError:
+        await safe_send_message(message, "Фото с памяткой временно недоступно. Пожалуйста, свяжитесь с мастером.")
 
 @dp.message(F.text == "🖤 Уход за тату (пленка)")
 async def tattoo_aftercare_film(message: types.Message):
@@ -1906,6 +2026,52 @@ async def tattoo_aftercare_film(message: types.Message):
         "• далее увлажнять заживляющей мазью/кремом по рекомендации мастера"
     )
     await safe_send_message(message, text)
+    
+    # Дополнительная информация с фото
+    additional_text = (
+        "— Плёнка — это не \"всё, можно забыть\"\n"
+        "Она защищает первые дни, но не отменяет уход после снятия.\n"
+        "Основное заживление начинается именно потом.\n\n"
+        "— Следите за состоянием под плёнкой\n"
+        "Небольшая жидкость внутри — это нормально.\n"
+        "Но если появляется сильная боль, распирание, неприятный запах или мутная жидкость —\n"
+        "плёнку лучше снять раньше и написать мастеру\n\n"
+        "— Не нарушать герметичность\n"
+        "Если плёнка отклеилась по краям, попала вода или воздух — она перестаёт работать как защита.\n"
+        "В этом случае её нужно снять и продолжить уход мазью\n\n"
+        "— Аккуратно с одеждой\n"
+        "Плёнка защищает от внешней среды, но трение всё равно влияет.\n"
+        "Старайтесь избегать давления и плотной одежды.\n\n"
+        "— Снятие — только правильно\n"
+        "Снимать под тёплой водой, медленно, без рывков.\n"
+        "Если тянуть \"на сухую\" — можно травмировать кожу.\n"
+        "Обязательно ❗️хорошо промыть с мылом и убрать остатки клея.\n\n"
+        "— После снятия может казаться, что \"всё уже зажило\"\n"
+        "Тату выглядит гладкой и яркой — но это только первый этап. Дальше идёт классическое заживление с мазью.\n\n"
+        "⸻—————\n"
+        "❗️Важно\n"
+        "Если после снятия плёнки появляются:\n"
+        "покраснение, боль, отёк, мокнутие —\n"
+        "не игнорировать и не ждать\n"
+        "Лучшее решение — сразу написать мастеру\n"
+        "или проконсультироваться с врачом ❤️"
+    )
+    
+    try:
+        media = []
+        for photo_name in ["zxc1.jpg", "zxc2.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(photo_name)))
+            except FileNotFoundError:
+                logger.warning(f"Фото {photo_name} не найдено")
+        
+        if media:
+            await safe_send_message(message, additional_text)
+            await safe_send_media_group(message, media)
+        else:
+            await safe_send_message(message, additional_text)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке дополнительной информации: {e}")
 
 @dp.message(F.text == "🖤 Уход за тату (мазь)")
 async def tattoo_aftercare_ointment(message: types.Message):
@@ -1919,6 +2085,55 @@ async def tattoo_aftercare_ointment(message: types.Message):
         "• носить свободную одежду, не натирающую тату"
     )
     await safe_send_message(message, text)
+    
+    # Дополнительная важная информация с фото
+    additional_text = (
+        "❗️Что ещё важно знать\n\n"
+        "— Не перекармливайте тату мазью\n"
+        "Толстый слой = парниковый эффект = риск воспаления.\n"
+        "Тату должна \"дышать\", а не «плавать» в креме.\n"
+        "Она должна быть всегда слегка увлажненной❤️‍🔥!\n\n"
+        "— Одежда\n"
+        "Только свободная, мягкая ткань. Никакой синтетики, обтягивающих вещей и трения.\n\n"
+        "— Сон\n"
+        "Не спать на тату.\n"
+        "Даже один неудачный сон может дать раздражение или смазать заживление.\n\n"
+        "— Не чесать, даже если зудит\n"
+        "Зуд = этап заживления, а не повод вмешиваться.\n"
+        "Любое трение = риск потери пигмента.\n\n"
+        "— Никакого спорта \"в упор\" первые дни\n"
+        "Пот + трение + перегрев = идеальная среда для проблем.\n\n"
+        "— Алкоголь\n"
+        "Замедляет восстановление и усиливает отёк.\n"
+        "Если хочется красивый результат — лучше отложить.\n\n"
+        "— Домашние животные\n"
+        "Минимизировать контакт.\n"
+        "Шерсть и микрофлора — частая причина воспалений.\n\n"
+        "— Не слушать советы \"из интернета\" и знакомых\n"
+        "У всех разный опыт, кожа и заживление.\n"
+        "Работает только система, которую вам дали.\n\n"
+        "⸻——————\n"
+        "❗️И главное\n"
+        "Если что-то вызывает сомнения: не ждать и не экспериментировать, а писать мастеру\n"
+        "Красивое заживление — это не случайность,\n"
+        "это результат правильных действий ❤️✨"
+    )
+    
+    try:
+        media = []
+        for photo_name in ["zxc.jpg", "qwe.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(photo_name)))
+            except FileNotFoundError:
+                logger.warning(f"Фото {photo_name} не найдено")
+        
+        if media:
+            await safe_send_message(message, additional_text)
+            await safe_send_media_group(message, media)
+        else:
+            await safe_send_message(message, additional_text)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке дополнительной информации: {e}")
 
 @dp.message(F.text == "💔 Не следуете рекомендациям")
 async def tattoo_no_care(message: types.Message):
@@ -1954,19 +2169,174 @@ async def contact_master(message: types.Message):
     await safe_send_message(message, "Напишите мастеру напрямую:", reply_markup=keyboard)
 
 # -------------------- Функции напоминаний --------------------
-async def send_review_reminder(user_id: int):
-    text = (
-        "Буду благодарна за ваш отзыв 🥰\n\n"
-        "🤍 Tattoo.Gem — Яндекс Карты\n"
-        "https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964\n\n"
-        "🤍 Tattoo.Gem — 2ГИС\n"
-        "https://2gis.ru/sochi/geo/70000001075813793\n\n"
-        "Если прикрепите фото к отзыву — отдельная благодарность 💗✨\n\n"
-        "🔘 inst: tattoo.gem.sochi\n"
-        "🔘 Тату: t.me/TattooGemSochi\n"
-        "🔘 Пирсинг: t.me/GemShopSochi\n\n"
-        "Спасибо за доверие 🥰💕!"
+
+# 1. Напоминание за 1 день до визита
+async def send_visit_reminder(user_id: int, date: str, time: str, service_type: str):
+    """Напоминание за 1 день до визита"""
+    service_name = "тату" if service_type == "tattoo" else "пирсинг"
+    
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Подтверждаю", callback_data=f"confirm_visit_{user_id}")],
+            [InlineKeyboardButton(text="❌ Не смогу прийти", callback_data=f"cancel_visit_{user_id}")]
+        ]
     )
+    
+    text = (
+        f"💫 Напоминание о записи!\n\n"
+        f"Завтра в {time} вас ждут на {service_name} в студии Tattoo.Gem\n\n"
+        f"📍 Адрес: Московская 10, вход с торца здания\n\n"
+        f"Пожалуйста, подтвердите ваш визит 💖"
+    )
+    
+    try:
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке напоминания о визите: {e}")
+
+# 2. Запрос подтверждения через 1 час после процедуры
+async def send_confirmation_request(user_id: int, service_type: str):
+    """Запрос подтверждения визита через 1 час после процедуры"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="✅ Да, был(а) на процедуре", callback_data=f"client_confirm_{user_id}")]
+        ]
+    )
+    
+    text = "Подтвердите, пожалуйста, что вы были на процедуре сегодня 💖"
+    
+    try:
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке запроса подтверждения: {e}")
+
+# 3. После подтверждения клиентом - отправка памятки и мотивации
+async def send_aftercare_and_motivation(user_id: int, service_type: str):
+    """Отправка памятки по уходу и мотивационного сообщения"""
+    
+    if service_type == "piercing":
+        # Для пирсинга - кнопки выбора памятки
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="🧼 Общий уход за пирсингом", callback_data="care_general")],
+                [InlineKeyboardButton(text="👄 Уход за пирсингом в ротовой полости", callback_data="care_oral")]
+            ]
+        )
+        
+        text = (
+            "Спасибо за визит в нашу студию! 💖\n\n"
+            "Выберите памятку по уходу:"
+        )
+        
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+        
+        # Мотивационное сообщение
+        motivation_text = (
+            "Не отключайте бота ❤️\n\n"
+            "В нем вы можете найти много полезной информации о вашем пирсинге и заживлении\n\n"
+            "А так же в скором времени вам придет напоминание о «плановой замене ножки» 💫🫶🏽\n\n"
+            "Желаю вам легкого заживления! ❤️"
+        )
+        
+        await safe_send_message(user_id, motivation_text)
+        
+        # Отправляем мастеру вопрос о замене ножки
+        keyboard_master = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="✅ Да, нужна замена", callback_data=f"needs_replacement_yes_{user_id}")],
+                [InlineKeyboardButton(text="❌ Нет, не нужна", callback_data=f"needs_replacement_no_{user_id}")]
+            ]
+        )
+        
+        await bot.send_message(
+            ADMIN_ID,
+            f"Клиент {user_id} подтвердил визит.\n\nНужна ли ему замена ножки?",
+            reply_markup=keyboard_master
+        )
+        
+    else:  # tattoo
+        text = (
+            "Спасибо за визит в нашу студию! 💖\n\n"
+            "Не забывайте следовать рекомендациям по уходу за татуировкой.\n"
+            "Все памятки вы можете найти в меню бота 💫\n\n"
+            "Желаю вам красивого заживления! ❤️"
+        )
+        
+        await safe_send_message(user_id, text)
+        
+        # Планируем напоминание через 1 месяц для тату
+        scheduler.add_job(
+            send_tattoo_1month_reminder,
+            "date",
+            run_date=datetime.now() + timedelta(days=30),
+            args=[user_id]
+        )
+
+# 4. Напоминание о замене ножки (если мастер сказал "да")
+async def send_replacement_reminder_new(user_id: int):
+    """Напоминание о замене ножки через 1,5-2 недели"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Посмотреть окошки", url="https://t.me/GemShopSochi/1772")],
+            [InlineKeyboardButton(text="❓ Зачем нужна замена ножки", callback_data="why_replacement")]
+        ]
+    )
+    
+    text = (
+        "Добрый день! Как ваш пирсинг себя чувствует? ❤️\n\n"
+        "Возникли ли у вас вопросы во время заживления? Мастер с радостью ответит на них!\n\n"
+        "А так же напоминаем о плановой замене ножки ❤️🥰"
+    )
+    
+    try:
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке напоминания о замене: {e}")
+
+# 5. Проверка через 2 недели (если мастер сказал "нет" замене)
+async def send_2weeks_checkup(user_id: int):
+    """Проверка состояния через 2 недели"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Написать мастеру", url="https://t.me/Veronikagem")],
+            [InlineKeyboardButton(text="✅ Все хорошо 💫", callback_data=f"all_good_{user_id}")]
+        ]
+    )
+    
+    text = (
+        "Как ваш пирсинг? Все ли хорошо? ❤️\n\n"
+        "Если возникли какие-то вопросы, мастер с радостью на все ответит ❤️"
+    )
+    
+    try:
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке проверки через 2 недели: {e}")
+
+# 6. Напоминание через 1 месяц для тату
+async def send_tattoo_1month_reminder(user_id: int):
+    """Проверка заживления тату через 1 месяц"""
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="💌 Написать мастеру", url="https://t.me/Veronikagem")],
+            [InlineKeyboardButton(text="⭐️ Оставить отзыв", callback_data="leave_review")]
+        ]
+    )
+    
+    text = (
+        "Как дела? Как зажило все? 💖\n\n"
+        "Если есть вопросы или хотите показать результат - пишите!\n\n"
+        "Буду рада вашему отзыву 🥰"
+    )
+    
+    try:
+        await safe_send_message(user_id, text, reply_markup=keyboard)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке напоминания через месяц: {e}")
+
+# 7. Запрос отзыва (когда клиент нажал "Все хорошо")
+async def send_review_request(user_id: int):
+    """Запрос отзыва"""
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🧡 Яндекс Карты", url="https://yandex.ru/maps/org/tattoo_gem/216398393557?si=6npax900yu8d0n5htkwwgjn964")],
@@ -1976,35 +2346,157 @@ async def send_review_reminder(user_id: int):
             [InlineKeyboardButton(text="📱 Telegram Пирсинг", url="https://t.me/GemShopSochi")]
         ]
     )
+    
+    text = (
+        "Я буду рада вашей обратной связи о проделанной процедуре, атмосфере студии или о вашем мастере (Veronika Gem)!\n\n"
+        "Если прикрепите фото к отзыву — отдельная благодарность 💗✨\n\n"
+        "Спасибо за доверие 🥰💕!"
+    )
+    
     try:
         await safe_send_message(user_id, text, reply_markup=keyboard)
     except Exception as e:
-        logger.error(f"Ошибка при отправке напоминания об отзыве: {e}")
+        logger.error(f"Ошибка при отправке запроса отзыва: {e}")
 
-async def send_replacement_reminder(user_id: int):
-    try:
-        await safe_send_message(
-            user_id,
-            "🔔 Напоминание о плановой замене украшения!\n\n"
-            "Прошло 2 недели с момента прокола - самое время записаться на замену "
-            "начального украшения (бампера/штанги) на постоянное.\n\n"
-            "Записаться можно через меню бота или позвонив по телефону.\n\n"
-            "Если украшение уже заменили - просто проигнорируйте это сообщение 💫"
-        )
-    except Exception as e:
-        logger.error(f"Ошибка при отправке напоминания о замене: {e}")
+# -------------------- Обработчики callback для новой системы напоминаний --------------------
 
-async def send_tattoo_3months_reminder(user_id: int):
-    text = (
-        "☀️ Прошло 3 месяца с момента вашего визита!\n"
-        "Полное заживление татуировки занимает около 3 месяцев — это время, когда пигмент окончательно закрепляется в коже.\n"
-        "Теперь вы можете оценить, как выглядит татуировка, и решить, нужна ли коррекция.\n\n"
-        "Если хотите записаться на коррекцию или просто показать, как зажило, напишите мне 💌"
+# Подтверждение/отмена визита за 1 день
+@dp.callback_query(F.data.startswith("confirm_visit_"))
+async def confirm_visit(callback: types.CallbackQuery):
+    await callback.answer("✅ Спасибо! Ждём вас завтра!")
+    await callback.message.edit_text("✅ Визит подтверждён. До встречи!")
+
+@dp.callback_query(F.data.startswith("cancel_visit_"))
+async def cancel_visit(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    await callback.answer("Жаль, что не получится. Свяжитесь с мастером для переноса")
+    await callback.message.edit_text("Для переноса записи свяжитесь с мастером: @Veronikagem")
+    
+    # Уведомляем мастера
+    await bot.send_message(ADMIN_ID, f"⚠️ Клиент {user_id} отменил визит")
+
+# Подтверждение клиентом, что был на процедуре
+@dp.callback_query(F.data.startswith("client_confirm_"))
+async def client_confirm(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
+    
+    # Отмечаем в БД
+    mark_client_confirmed(user_id)
+    
+    # Получаем тип услуги
+    booking = get_booking_by_user(user_id)
+    service_type = booking['service_type'] if booking and booking['service_type'] else 'piercing'
+    
+    await callback.answer("✅ Спасибо за подтверждение!")
+    await callback.message.edit_text("✅ Спасибо за подтверждение!")
+    
+    # Отправляем памятку и мотивацию
+    await send_aftercare_and_motivation(user_id, service_type)
+
+# Мастер отвечает на вопрос о замене ножки
+@dp.callback_query(F.data.startswith("needs_replacement_yes_"))
+async def needs_replacement_yes(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[3])
+    
+    # Сохраняем в БД
+    set_needs_replacement(user_id, True)
+    
+    # Планируем напоминание через 1,5-2 недели (возьмём 12 дней)
+    scheduler.add_job(
+        send_replacement_reminder_new,
+        "date",
+        run_date=datetime.now() + timedelta(days=12),
+        args=[user_id]
     )
+    
+    await callback.answer("✅ Напоминание о замене запланировано на через 12 дней")
+    await callback.message.edit_text(f"✅ Клиенту {user_id} будет отправлено напоминание о замене через 12 дней")
+
+@dp.callback_query(F.data.startswith("needs_replacement_no_"))
+async def needs_replacement_no(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[3])
+    
+    # Сохраняем в БД
+    set_needs_replacement(user_id, False)
+    
+    # Планируем проверку через 2 недели
+    scheduler.add_job(
+        send_2weeks_checkup,
+        "date",
+        run_date=datetime.now() + timedelta(days=14),
+        args=[user_id]
+    )
+    
+    await callback.answer("✅ Проверка запланирована через 2 недели")
+    await callback.message.edit_text(f"✅ Клиенту {user_id} будет отправлена проверка через 2 недели")
+
+# Клиент нажал "Все хорошо"
+@dp.callback_query(F.data.startswith("all_good_"))
+async def all_good(callback: types.CallbackQuery):
+    user_id = int(callback.data.split("_")[2])
+    
+    await callback.answer("✅ Отлично!")
+    await callback.message.edit_text("✅ Рады, что всё хорошо!")
+    
+    # Отправляем запрос на отзыв
+    await send_review_request(user_id)
+
+# Кнопка "Зачем нужна замена ножки"
+@dp.callback_query(F.data == "why_replacement")
+async def why_replacement(callback: types.CallbackQuery):
+    text = (
+        "🔧 Замена ножки (даунсайз) — ВАЖНО\n\n"
+        "После прокола украшение всегда устанавливается длиннее, чтобы оставить место для отёка.\n"
+        "Когда отёк спадает, украшение обязательно нужно заменить на более короткое.\n\n"
+        "Длинная ножка может:\n"
+        "• цепляться за волосы и одежду\n"
+        "• постоянно двигаться и травмировать канал\n"
+        "• вызывать раздражение\n"
+        "• замедлять заживление\n\n"
+        "Короткая ножка фиксирует украшение и позволяет проколу заживать правильно 💫"
+    )
+    await callback.answer()
+    await safe_send_message(callback.from_user.id, text)
+
+# Кнопка "Оставить отзыв"
+@dp.callback_query(F.data == "leave_review")
+async def leave_review(callback: types.CallbackQuery):
+    await callback.answer()
+    await send_review_request(callback.from_user.id)
+
+# Обработчики для памяток по уходу (из callback после подтверждения)
+@dp.callback_query(F.data == "care_general")
+async def care_general_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    # Отправляем памятку как в обычном меню
     try:
-        await safe_send_message(user_id, text)
+        media = []
+        for photo_name in ["care_general_1.jpg", "care_general_2.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(photo_name)))
+            except FileNotFoundError:
+                logger.warning(f"Фото {photo_name} не найдено")
+        
+        if media:
+            await safe_send_media_group(callback.message, media)
     except Exception as e:
-        logger.error(f"Ошибка при отправке напоминания о 3 месяцах: {e}")
+        logger.error(f"Ошибка при отправке памятки: {e}")
+
+@dp.callback_query(F.data == "care_oral")
+async def care_oral_callback(callback: types.CallbackQuery):
+    await callback.answer()
+    try:
+        media = []
+        for photo_name in ["care_oral_3.jpg", "care_oral_4.jpg"]:
+            try:
+                media.append(types.InputMediaPhoto(media=FSInputFile(photo_name)))
+            except FileNotFoundError:
+                logger.warning(f"Фото {photo_name} не найдено")
+        
+        if media:
+            await safe_send_media_group(callback.message, media)
+    except Exception as e:
+        logger.error(f"Ошибка при отправке памятки: {e}")
 
 # -------------------- Fallback --------------------
 @dp.message()
